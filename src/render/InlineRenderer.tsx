@@ -314,10 +314,10 @@ export class InlineRenderer implements Renderer {
 
     console.log()
     console.log(`  \x1b[92m\x1b[1m██████╗ \x1b[0m  \x1b[1mPaiCLI \x1b[92mπ\x1b[0m  \x1b[90mv${version}\x1b[0m`)
-    console.log(`  \x1b[92m\x1b[1m╚═██╔═╝\x1b[0m  \x1b[90mModel\x1b[0m ${model}${provider}`)
-    console.log(`  \x1b[92m\x1b[1m  ██║  \x1b[0m  \x1b[90mMCP\x1b[0m ${mcp} · \x1b[90m${status?.toolCount ?? 0} tools\x1b[0m · ${skills} skills · ${mode}`)
-    console.log(`  \x1b[92m\x1b[1m  ██║  \x1b[0m  \x1b[90mReAct · Plan · MCP · Browser · Image · Tools · Memory · RAG\x1b[0m`)
-    console.log(`  \x1b[92m\x1b[1m  ╚═╝  \x1b[0m`)
+    console.log(`  \x1b[92m\x1b[1m  ██  ██╗\x1b[0m  \x1b[90mModel\x1b[0m ${model}${provider}`)
+    console.log(`  \x1b[92m\x1b[1m  ██  ██║\x1b[0m  \x1b[90mMCP\x1b[0m ${mcp} · \x1b[90m${status?.toolCount ?? 0} tools\x1b[0m · ${skills} skills · ${mode}`)
+    console.log(`  \x1b[92m\x1b[1m  ██  ██║\x1b[0m  \x1b[90mReAct · Plan · MCP · Browser · Image · Tools · Memory · RAG\x1b[0m`)
+    console.log(`  \x1b[92m\x1b[1m  ╚╝  ╚╝\x1b[0m`)
     console.log()
     console.log('Tips for getting started:')
     console.log('1. Type / for commands and Tab completion')
@@ -486,17 +486,17 @@ function WelcomePanel({ status, version }: { status: StatusInfo | null; version:
         <Text dimColor>v{version}</Text>
       </Box>
       <Box>
-        <Text color="green" bold>╚═██╔═╝  </Text>
+        <Text color="green" bold>  ██  ██╗  </Text>
         <Text dimColor>Model </Text>
         <Text>{model}{provider}</Text>
       </Box>
       <Box>
-        <Text color="green" bold>  ██║    </Text>
+        <Text color="green" bold>  ██  ██║  </Text>
         <Text dimColor>MCP </Text>
         <Text>{mcp} · {status?.toolCount ?? 0} tools · {skills} skills · {mode}</Text>
       </Box>
       <Box>
-        <Text color="green" bold>  ╚═╝    </Text>
+        <Text color="green" bold>  ╚╝  ╚╝   </Text>
         <Text dimColor>ReAct · Plan · MCP · Browser · Image · Tools · Memory · RAG</Text>
       </Box>
       <Box marginTop={1} flexDirection="column">
@@ -510,11 +510,11 @@ function WelcomePanel({ status, version }: { status: StatusInfo | null; version:
 }
 
 function PromptLine({ value, active }: { value: string; active: boolean }): React.ReactElement {
-  const placeholder = active ? 'message / @path / @image' : 'processing...'
+  const content = value || (active ? '' : 'processing...')
   return (
     <Box paddingX={1} height={1}>
       <Text color="magenta">{'>'} </Text>
-      <Text>{value || <Text dimColor>{placeholder}</Text>}</Text>
+      <Text>{active ? content : <Text dimColor>{content}</Text>}</Text>
       {active ? <Text color="cyan">█</Text> : null}
     </Box>
   )

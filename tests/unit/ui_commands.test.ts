@@ -83,6 +83,8 @@ describe('slash commands and terminal UI', () => {
 
     expect(output).toContain('PaiCLI')
     expect(output).toContain('deepseek-v4-pro (deepseek)')
+    expect(output).toContain('██  ██')
+    expect(output).not.toContain('╚═██╔═╝')
     expect(output).toMatch(/MCP.*5\/5/)
     expect(output).toContain('ctx')
     expect(output).toContain('turns 3')
