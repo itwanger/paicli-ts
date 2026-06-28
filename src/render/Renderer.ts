@@ -56,6 +56,9 @@ export interface Renderer {
   /** 显示错误 */
   showError(error: Error): void
 
+  /** 显示本地命令输出 */
+  showOutput(text: string): void
+
   /** 显示状态信息 */
   showStatus(status: StatusInfo): void
 

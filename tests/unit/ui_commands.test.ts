@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
+import { PassThrough } from 'node:stream'
 import { commandRegistry, type ModelStatus } from '../../src/commands/index.js'
 import { InlineRenderer } from '../../src/render/InlineRenderer.js'
 import { createLlmClient } from '../../src/llm/index.js'
+import { LineReader } from '../../src/render/LineReader.js'
 
 function modelStatus(model: string): ModelStatus {
   return {
@@ -98,5 +100,24 @@ describe('slash commands and terminal UI', () => {
 
     expect(client.maxContextWindow).toBe(1_000_000)
     expect(client.capabilities.promptCache).toBe(true)
+  })
+
+  it('keeps piped fallback input across multiple REPL reads', async () => {
+    const input = new PassThrough()
+    const output = new PassThrough()
+    const prompts: Buffer[] = []
+    output.on('data', (chunk: Buffer) => prompts.push(chunk))
+    const reader = new LineReader(input, output, false)
+
+    input.end('/status\n/model deepseek-v4-pro\n/exit\n')
+
+    try {
+      await expect(reader.read('> ')).resolves.toBe('/status')
+      await expect(reader.read('> ')).resolves.toBe('/model deepseek-v4-pro')
+      await expect(reader.read('> ')).resolves.toBe('/exit')
+      expect(Buffer.concat(prompts).toString()).toBe('> > > ')
+    } finally {
+      reader.close()
+    }
   })
 })

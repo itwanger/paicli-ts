@@ -53,8 +53,8 @@ export async function startRepl(config: PaiCliConfig, cwd: string): Promise<void
   let sessionTokens = 0
 
   // 5. 启动 REPL
-  await renderer.start()
   renderer.showStatus(buildStatus('idle'))
+  await renderer.start()
   renderer.showWelcome(VERSION)
 
   const runLoop = async () => {
@@ -109,7 +109,7 @@ export async function startRepl(config: PaiCliConfig, cwd: string): Promise<void
             config.prompt.agentMode = enabled ? 'team' : 'react'
           },
         })
-        if (output) console.log(output)
+        if (output) renderer.showOutput(output)
         if (shouldExit) break
         continue
       }
@@ -118,10 +118,22 @@ export async function startRepl(config: PaiCliConfig, cwd: string): Promise<void
       try {
         let assistantText = ''
         let completed = false
+        let thinkingStarted = false
         renderer.showStatus(buildStatus('thinking'))
         for await (const event of runAgent(input)) {
           switch (event.type) {
+            case 'thinking_delta':
+              if (!thinkingStarted) {
+                renderer.beginThinking()
+                thinkingStarted = true
+              }
+              renderer.appendThinking(event.thinking)
+              break
             case 'text_delta':
+              if (thinkingStarted) {
+                renderer.endThinking()
+                thinkingStarted = false
+              }
               assistantText += event.text
               renderer.appendText(event.text)
               break
@@ -144,6 +156,10 @@ export async function startRepl(config: PaiCliConfig, cwd: string): Promise<void
               break
             case 'done':
               completed = true
+              if (thinkingStarted) {
+                renderer.endThinking()
+                thinkingStarted = false
+              }
               sessionTokens = Math.max(sessionTokens, event.totalTokens, getContextTokens())
               renderer.endText()
               break
@@ -165,8 +181,6 @@ export async function startRepl(config: PaiCliConfig, cwd: string): Promise<void
         renderer.showError(err instanceof Error ? err : new Error(String(err)))
         renderer.showStatus(buildStatus('idle'))
       }
-
-      console.log()
     }
 
     await renderer.stop()

@@ -5,13 +5,18 @@
 import type { Renderer, StatusInfo, ApprovalRequest, ApprovalResult } from './Renderer.js'
 import type { StreamEvent } from '../llm/types.js'
 import type { ToolResult } from '../types/tool.js'
+import { LineReader } from './LineReader.js'
 
 export class PlainRenderer implements Renderer {
   readonly mode = 'plain' as const
   private status: StatusInfo | null = null
+  private lineReader: LineReader | null = null
 
   async start(): Promise<void> {}
-  async stop(): Promise<void> {}
+  async stop(): Promise<void> {
+    this.lineReader?.close()
+    this.lineReader = null
+  }
 
   showWelcome(version: string): void {
     const model = this.status?.model ?? 'unknown'
@@ -82,6 +87,10 @@ export class PlainRenderer implements Renderer {
     console.error(`Error: ${error.message}`)
   }
 
+  showOutput(text: string): void {
+    console.log(text)
+  }
+
   showStatus(_status: StatusInfo): void {
     this.status = _status
   }
@@ -95,14 +104,14 @@ export class PlainRenderer implements Renderer {
   }
 
   async readInput(): Promise<string> {
-    const readline = await import('node:readline')
-    return new Promise((resolve) => {
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-      rl.question('> ', (answer) => {
-        rl.close()
-        resolve(answer)
-      })
-    })
+    if (!this.lineReader) {
+      this.lineReader = new LineReader(
+        process.stdin,
+        process.stdout,
+        Boolean(process.stdin.isTTY && process.stdout.isTTY),
+      )
+    }
+    return this.lineReader.read('> ')
   }
 
   clear(): void {
