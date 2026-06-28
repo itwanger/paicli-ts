@@ -55,7 +55,7 @@ DeepSeek 配置示例：
 
 ```bash
 PAICLI_PROVIDER=deepseek
-PAICLI_MODEL=deepseek-chat
+PAICLI_MODEL=deepseek-v4-flash
 PAICLI_API_KEY=your_deepseek_key
 ```
 
@@ -82,7 +82,13 @@ pnpm paicli -p "帮我总结这个项目"
 指定模型：
 
 ```bash
-pnpm paicli --provider deepseek --model deepseek-chat -p "hello"
+pnpm paicli --provider deepseek --model deepseek-v4-flash -p "hello"
+```
+
+切换到 DeepSeek V4 Pro：
+
+```bash
+pnpm paicli --provider deepseek --model deepseek-v4-pro -p "hello"
 ```
 
 ## MCP Server

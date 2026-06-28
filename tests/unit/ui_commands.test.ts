@@ -7,22 +7,22 @@ function modelStatus(model: string): ModelStatus {
   return {
     provider: 'deepseek',
     model,
-    contextWindow: model === 'deepseek-v4-pro' ? 1_000_000 : 64_000,
-    compressionThreshold: 0.96,
-    shortTermMemoryBudget: 450_000,
-    mcpResourceIndex: true,
-    promptCache: 'automatic-prefix-cache',
+    contextWindow: 1_000_000,
+    compressionThreshold: 0.48,
+    shortTermMemoryBudget: 600_000,
+    mcpResourceIndex: false,
+    promptCache: 'deepseek-disk-cache',
     conversationTurns: 2,
   }
 }
 
 describe('slash commands and terminal UI', () => {
   it('switches model through /model and reports context strategy', async () => {
-    let current = modelStatus('deepseek-chat')
+    let current = modelStatus('deepseek-v4-flash')
 
     const output = await commandRegistry.execute('/model deepseek-v4-pro', {
       cwd: process.cwd(),
-      config: { provider: 'deepseek', model: 'deepseek-chat' },
+      config: { provider: 'deepseek', model: 'deepseek-v4-flash' },
       setModel(model, provider) {
         current = { ...modelStatus(model), provider: provider ?? 'deepseek' }
         return current
@@ -34,19 +34,21 @@ describe('slash commands and terminal UI', () => {
 
     expect(output).toContain('已切换到: deepseek-v4-pro (deepseek)')
     expect(output).toContain('window: 1000000')
+    expect(output).toContain('压缩阈值: 48% (480000 tokens)')
+    expect(output).toContain('prompt cache: deepseek-disk-cache')
     expect(output).toContain('对话上下文已保留: 2 turns')
   })
 
   it('shows current model through /status', async () => {
     const output = await commandRegistry.execute('/status', {
       cwd: process.cwd(),
-      config: { provider: 'deepseek', model: 'deepseek-chat' },
+      config: { provider: 'deepseek', model: 'deepseek-v4-flash' },
       getModelStatus() {
-        return modelStatus('deepseek-chat')
+        return modelStatus('deepseek-v4-flash')
       },
     })
 
-    expect(output).toContain('当前模型: deepseek-chat (deepseek)')
+    expect(output).toContain('当前模型: deepseek-v4-flash (deepseek)')
     expect(output).toContain('上下文策略')
   })
 
@@ -84,7 +86,7 @@ describe('slash commands and terminal UI', () => {
     expect(output).toContain('turns 3')
   })
 
-  it('uses one million context window for deepseek-v4-pro', () => {
+  it('uses official DeepSeek V4 context window', () => {
     const client = createLlmClient({
       provider: 'deepseek',
       model: 'deepseek-v4-pro',
@@ -95,5 +97,6 @@ describe('slash commands and terminal UI', () => {
     })
 
     expect(client.maxContextWindow).toBe(1_000_000)
+    expect(client.capabilities.promptCache).toBe(true)
   })
 })

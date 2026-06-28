@@ -18,7 +18,7 @@ export class MemoryManager {
     this.conversation = new ConversationMemory(config.maxConversationHistory)
     this.longTerm = config.longTermEnabled ? new LongTermMemory(config.longTermDbPath) : null
     this.compressor = new ContextCompressor()
-    this.budget = new TokenBudget(config.tokenBudgetMode, maxContextWindow)
+    this.budget = new TokenBudget(config.tokenBudgetMode, maxContextWindow, config.compressionThreshold)
   }
 
   /** 获取适合发送给 LLM 的消息历史 */

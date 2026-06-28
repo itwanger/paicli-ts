@@ -16,6 +16,7 @@ import { Agent } from './agent/Agent.js'
 import { PlanExecuteAgent } from './agent/PlanExecuteAgent.js'
 import { AgentOrchestrator } from './agent/AgentOrchestrator.js'
 import type { Message } from './types/message.js'
+import { TokenBudget } from './memory/TokenBudget.js'
 
 /** 启动 REPL */
 export async function startRepl(config: PaiCliConfig, cwd: string): Promise<void> {
@@ -225,6 +226,7 @@ export async function startRepl(config: PaiCliConfig, cwd: string): Promise<void
   function buildStatus(statusText: string) {
     const mcpServers = config.mcp.servers.length
     const enabledMcpServers = config.mcp.servers.filter((server) => server.enabled).length
+    const contextStatus = getContextBudgetStatus()
     return {
       model: config.llm.model,
       provider: config.llm.provider,
@@ -240,21 +242,45 @@ export async function startRepl(config: PaiCliConfig, cwd: string): Promise<void
       loadedSkills: 0,
       hitlMode: config.policy.hitlMode,
       memoryEnabled: config.features.memory,
-      compressionThresholdPercent: Math.round(config.memory.compressionThreshold * 100),
+      compressionThresholdPercent: contextStatus.compressionThresholdPercent,
       conversationTurns: Math.floor(history.length / 2),
     }
   }
 
   function getModelStatus(): ModelStatus {
+    const contextStatus = getContextBudgetStatus()
     return {
       provider: config.llm.provider,
       model: config.llm.model,
       contextWindow: llmClient.maxContextWindow,
-      compressionThreshold: config.memory.compressionThreshold,
-      shortTermMemoryBudget: Math.floor(llmClient.maxContextWindow * 0.45),
-      mcpResourceIndex: config.features.mcp,
-      promptCache: 'automatic-prefix-cache',
+      compressionThreshold: contextStatus.compressionThresholdRatio,
+      shortTermMemoryBudget: contextStatus.tokenBudget,
+      mcpResourceIndex: false,
+      promptCache: getPromptCacheStatus(),
       conversationTurns: Math.floor(history.length / 2),
+    }
+  }
+
+  function getPromptCacheStatus(): string {
+    if (!llmClient.capabilities.promptCache) return 'off'
+    return config.llm.provider === 'deepseek' ? 'deepseek-disk-cache' : 'provider-supported'
+  }
+
+  function getContextBudgetStatus() {
+    const budget = new TokenBudget(
+      config.memory.tokenBudgetMode,
+      llmClient.maxContextWindow,
+      config.memory.compressionThreshold,
+    )
+    const compressionThreshold = budget.getCompressionThreshold()
+    const compressionThresholdRatio = llmClient.maxContextWindow > 0
+      ? compressionThreshold / llmClient.maxContextWindow
+      : 0
+    return {
+      tokenBudget: budget.getBudget(),
+      compressionThreshold,
+      compressionThresholdRatio,
+      compressionThresholdPercent: Math.round(compressionThresholdRatio * 100),
     }
   }
 

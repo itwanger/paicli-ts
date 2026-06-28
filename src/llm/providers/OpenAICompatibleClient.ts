@@ -15,6 +15,8 @@ export interface OpenAICompatibleConfig extends BaseLlmConfig {
   providerName: string
   /** 最大上下文窗口 */
   maxContextWindow?: number
+  /** Provider 是否提供 prompt/cache 复用能力 */
+  promptCache?: boolean
 }
 
 /**
@@ -34,7 +36,7 @@ export class OpenAICompatibleClient extends BaseLlmClient {
     this.capabilities = {
       tools: true,
       images: false,
-      promptCache: false,
+      promptCache: config.promptCache ?? false,
     }
   }
 

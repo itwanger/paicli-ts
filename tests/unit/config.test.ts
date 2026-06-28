@@ -22,7 +22,7 @@ describe('Config', () => {
   it('should return default config when no overrides', () => {
     const config = loadConfig()
     expect(config.llm.provider).toBe('deepseek')
-    expect(config.llm.model).toBe('deepseek-chat')
+    expect(config.llm.model).toBe('deepseek-v4-flash')
     expect(config.renderMode).toBe('inline')
     expect(config.features.mcp).toBe(true)
   })

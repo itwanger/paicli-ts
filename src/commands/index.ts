@@ -161,12 +161,12 @@ function parseModelArgs(args: string[], config: Record<string, unknown>): { prov
   if (!first) {
     return {
       provider: String(config.provider ?? 'deepseek'),
-      model: String(config.model ?? 'deepseek-chat'),
+      model: String(config.model ?? 'deepseek-v4-flash'),
     }
   }
   if (first.includes('/')) {
     const [provider, model] = first.split('/', 2)
-    return { provider: provider || 'deepseek', model: model || 'deepseek-chat' }
+    return { provider: provider || 'deepseek', model: model || 'deepseek-v4-flash' }
   }
   if (args.length >= 2) {
     return { provider: first, model: args[1] }

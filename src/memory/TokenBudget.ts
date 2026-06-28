@@ -12,10 +12,12 @@ const BUDGET_RATIOS: Record<TokenBudgetMode, number> = {
 export class TokenBudget {
   private mode: TokenBudgetMode
   private maxContextWindow: number
+  private compressionThresholdRatio: number
 
-  constructor(mode: TokenBudgetMode, maxContextWindow: number) {
+  constructor(mode: TokenBudgetMode, maxContextWindow: number, compressionThresholdRatio = 0.8) {
     this.mode = mode
     this.maxContextWindow = maxContextWindow
+    this.compressionThresholdRatio = compressionThresholdRatio
   }
 
   /** 获取可用 Token 预算 */
@@ -35,7 +37,7 @@ export class TokenBudget {
 
   /** 获取压缩阈值 */
   getCompressionThreshold(): number {
-    return Math.floor(this.getBudget() * 0.8)
+    return Math.floor(this.getBudget() * this.compressionThresholdRatio)
   }
 
   /** 设置模式 */

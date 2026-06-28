@@ -1,6 +1,6 @@
 /**
  * DeepSeek LLM 客户端
- * 支持 DeepSeek V3/V4 系列模型
+ * 支持 DeepSeek 系列模型
  */
 
 import { OpenAICompatibleClient, type OpenAICompatibleConfig } from './OpenAICompatibleClient.js'
@@ -9,12 +9,12 @@ const DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1'
 
 /** DeepSeek 模型配置 */
 export const DEEPSEEK_MODELS: Record<string, { maxContext: number }> = {
-  'deepseek-chat': { maxContext: 64_000 },
-  'deepseek-reasoner': { maxContext: 64_000 },
-  'deepseek-coder': { maxContext: 128_000 },
-  'deepseek-v3': { maxContext: 128_000 },
-  'deepseek-v4': { maxContext: 1_000_000 },
+  'deepseek-v4-flash': { maxContext: 1_000_000 },
   'deepseek-v4-pro': { maxContext: 1_000_000 },
+  // Deprecated aliases kept for compatibility with existing DeepSeek configs.
+  'deepseek-chat': { maxContext: 1_000_000 },
+  'deepseek-reasoner': { maxContext: 1_000_000 },
+  'deepseek-coder': { maxContext: 128_000 },
 }
 
 /**
@@ -29,6 +29,7 @@ export class DeepSeekClient extends OpenAICompatibleClient {
       providerName: 'deepseek',
       baseUrl: config.baseUrl ?? DEEPSEEK_BASE_URL,
       maxContextWindow: modelConfig.maxContext,
+      promptCache: true,
     })
   }
 }

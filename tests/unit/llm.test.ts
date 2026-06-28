@@ -8,7 +8,7 @@ import type { LlmConfig } from '../../src/types/config.js'
 function makeConfig(overrides: Partial<LlmConfig> = {}): LlmConfig {
   return {
     provider: 'deepseek',
-    model: 'deepseek-chat',
+    model: 'deepseek-v4-flash',
     apiKey: 'test-key',
     maxTokens: 4096,
     temperature: 0.7,
@@ -22,8 +22,9 @@ describe('LlmClientFactory', () => {
     const client = createLlmClient(makeConfig({ provider: 'deepseek' }))
     expect(client).toBeInstanceOf(DeepSeekClient)
     expect(client.providerName).toBe('deepseek')
-    expect(client.modelName).toBe('deepseek-chat')
+    expect(client.modelName).toBe('deepseek-v4-flash')
     expect(client.capabilities.tools).toBe(true)
+    expect(client.capabilities.promptCache).toBe(true)
   })
 
   it('should create GLM client', () => {
@@ -50,6 +51,9 @@ describe('LlmClientFactory', () => {
   })
 
   it('should set correct context window for known models', () => {
+    const deepseekV4Pro = createLlmClient(makeConfig({ model: 'deepseek-v4-pro' }))
+    expect(deepseekV4Pro.maxContextWindow).toBe(1_000_000)
+
     const deepseekCoder = createLlmClient(makeConfig({ model: 'deepseek-coder' }))
     expect(deepseekCoder.maxContextWindow).toBe(128_000)
 

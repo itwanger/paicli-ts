@@ -8,7 +8,7 @@ import type { PaiCliConfig } from '../types/config.js'
 export const DEFAULT_CONFIG: PaiCliConfig = {
   llm: {
     provider: 'deepseek',
-    model: 'deepseek-chat',
+    model: 'deepseek-v4-flash',
     apiKey: '',
     maxTokens: 8192,
     temperature: 0.7,
@@ -35,7 +35,7 @@ export const DEFAULT_CONFIG: PaiCliConfig = {
     longTermEnabled: true,
     longTermDbPath: '~/.paicli/memory.db',
     tokenBudgetMode: 'balanced',
-    compressionThreshold: 0.96,
+    compressionThreshold: 0.8,
   },
 
   policy: {
