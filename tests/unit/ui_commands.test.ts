@@ -4,6 +4,7 @@ import { commandRegistry, type ModelStatus } from '../../src/commands/index.js'
 import { InlineRenderer } from '../../src/render/InlineRenderer.js'
 import { createLlmClient } from '../../src/llm/index.js'
 import { LineReader } from '../../src/render/LineReader.js'
+import { parseInlineMarkdown, parseMarkdownBlocks } from '../../src/render/MarkdownText.js'
 
 function modelStatus(model: string): ModelStatus {
   return {
@@ -121,5 +122,24 @@ describe('slash commands and terminal UI', () => {
     } finally {
       reader.close()
     }
+  })
+
+  it('parses markdown into terminal renderable blocks', () => {
+    const blocks = parseMarkdownBlocks('## 标题\n\n1. **重点** 和 `code`\n> 引用\n```ts\nconst x = 1\n```')
+
+    expect(blocks).toMatchObject([
+      { type: 'heading', level: 2, text: '标题' },
+      { type: 'blank' },
+      { type: 'list', marker: '1.', text: '**重点** 和 `code`' },
+      { type: 'quote', text: '引用' },
+      { type: 'code', language: 'ts', lines: ['const x = 1'] },
+    ])
+    expect(parseInlineMarkdown('**重点** 和 `code` [link](https://example.com)')).toMatchObject([
+      { type: 'bold', text: '重点' },
+      { type: 'text', text: ' 和 ' },
+      { type: 'code', text: 'code' },
+      { type: 'text', text: ' ' },
+      { type: 'link', label: 'link', url: 'https://example.com' },
+    ])
   })
 })

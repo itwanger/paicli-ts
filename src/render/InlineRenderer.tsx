@@ -11,6 +11,7 @@ import type { Renderer, StatusInfo, ApprovalRequest, ApprovalResult } from './Re
 import type { StreamEvent } from '../llm/types.js'
 import type { ToolResult } from '../types/tool.js'
 import { LineReader } from './LineReader.js'
+import { MarkdownText } from './MarkdownText.js'
 
 type TranscriptKind = 'welcome' | 'user' | 'assistant' | 'thinking' | 'tool' | 'tool_result' | 'error' | 'command'
 
@@ -118,6 +119,7 @@ export class InlineRenderer implements Renderer {
       process.stdout.write('\x1b[34mThinking...\x1b[0m')
       return
     }
+    this.currentAssistantId = null
     this.currentThinkingId = this.appendItem('thinking', '', 'Thinking')
   }
 
@@ -159,6 +161,8 @@ export class InlineRenderer implements Renderer {
 
   showToolCall(name: string, input: Record<string, unknown>): void {
     const summary = summarizeToolInput(input)
+    this.currentAssistantId = null
+    this.currentThinkingId = null
     if (!this.isTuiActive()) {
       console.log(`\x1b[33m> ${name}\x1b[0m(${summary})`)
       return
@@ -167,13 +171,16 @@ export class InlineRenderer implements Renderer {
   }
 
   showToolResult(result: ToolResult): void {
-    const summary = result.displaySummary ?? result.content.slice(0, 500)
+    const title = result.displaySummary ?? (result.isError ? 'Tool error' : 'Tool result')
+    const summary = result.content.slice(0, 1_200)
+    this.currentAssistantId = null
+    this.currentThinkingId = null
     if (!this.isTuiActive()) {
       if (result.isError) console.log(`\x1b[31merror\x1b[0m ${summary}`)
       else console.log(`\x1b[36mdone\x1b[0m ${summary}`)
       return
     }
-    this.appendItem('tool_result', summary, result.isError ? 'Tool error' : 'Tool result', result.isError)
+    this.appendItem('tool_result', summary, title, result.isError)
   }
 
   handleStreamEvent(event: StreamEvent): void {
@@ -428,31 +435,46 @@ function TranscriptRow({ item, status, version }: { item: TranscriptItem; status
   if (item.kind === 'assistant') {
     return (
       <Box marginTop={1}>
-        <Text wrap="wrap">{item.text}</Text>
+        <MarkdownText text={item.text} />
       </Box>
     )
   }
   if (item.kind === 'thinking') {
     return (
       <Box marginTop={1} flexDirection="column">
-        <Text dimColor italic>∴ Thinking</Text>
-        {item.text ? <Text dimColor wrap="wrap">{item.text}</Text> : null}
+        <Text color="blue">∴ Thinking</Text>
+        {item.text ? (
+          <Box paddingLeft={2}>
+            <MarkdownText text={item.text} dimColor maxLines={6} />
+          </Box>
+        ) : null}
       </Box>
     )
   }
   if (item.kind === 'tool') {
     return (
-      <Box marginTop={1}>
-        <Text color="yellow">⚡ {item.title ?? 'tool'}</Text>
-        {item.text ? <Text dimColor> ({item.text})</Text> : null}
+      <Box marginTop={1} flexDirection="column">
+        <Text wrap="wrap">
+          <Text color="yellow">⚡ Tool call</Text>
+          <Text dimColor> · </Text>
+          <Text bold>{item.title ?? 'tool'}</Text>
+          {item.text ? <Text dimColor>  {item.text}</Text> : null}
+        </Text>
       </Box>
     )
   }
   if (item.kind === 'tool_result') {
     return (
-      <Box marginTop={0}>
-        <Text color={item.isError ? 'red' : 'cyan'}>{item.isError ? '✗' : '✓'} </Text>
-        <Text dimColor wrap="wrap">{item.text}</Text>
+      <Box marginTop={1} flexDirection="column">
+        <Text>
+          <Text color={item.isError ? 'red' : 'cyan'}>{item.isError ? '✗ Tool error' : '✓ Tool result'}</Text>
+          {item.title ? <Text dimColor> · {item.title}</Text> : null}
+        </Text>
+        {item.text ? (
+          <Box paddingLeft={2}>
+            <MarkdownText text={item.text} dimColor maxLines={6} />
+          </Box>
+        ) : null}
       </Box>
     )
   }

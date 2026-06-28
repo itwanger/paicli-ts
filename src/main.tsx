@@ -145,6 +145,7 @@ export async function startRepl(config: PaiCliConfig, cwd: string): Promise<void
                 toolUseId: '',
                 content: event.result,
                 isError: event.isError,
+                displaySummary: event.name,
               })
               break
             case 'error':
