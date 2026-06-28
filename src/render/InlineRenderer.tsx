@@ -554,6 +554,10 @@ export function applyPromptInput(currentValue: string, input: string, key: Promp
     return { value: '', submit: `${currentValue}${input.slice(0, lineBreakIndex)}`.trim() }
   }
 
+  if (input === '\u007f' || input === '\b') {
+    return { value: Array.from(currentValue).slice(0, -1).join('') }
+  }
+
   if (key.return) {
     return { value: '', submit: currentValue.trim() }
   }

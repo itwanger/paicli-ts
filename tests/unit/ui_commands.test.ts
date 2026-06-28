@@ -151,4 +151,9 @@ describe('slash commands and terminal UI', () => {
     expect(applyPromptInput('', '你好\r', { return: true })).toEqual({ value: '', submit: '你好' })
     expect(applyPromptInput('联', '网查一下\n', { return: true })).toEqual({ value: '', submit: '联网查一下' })
   })
+
+  it('handles raw terminal backspace characters', () => {
+    expect(applyPromptInput('/xit', '\u007f', {})).toEqual({ value: '/xi' })
+    expect(applyPromptInput('你好', '\b', {})).toEqual({ value: '你' })
+  })
 })
