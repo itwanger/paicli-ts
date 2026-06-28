@@ -13,6 +13,7 @@ import type { ToolResult } from '../types/tool.js'
 export class InlineRenderer implements Renderer {
   readonly mode = 'inline' as const
   private instance: Instance | null = null
+  private status: StatusInfo | null = null
 
   async start(): Promise<void> {
     // Ink 实例在 main.tsx 中创建
@@ -24,12 +25,31 @@ export class InlineRenderer implements Renderer {
   }
 
   showWelcome(version: string): void {
-    console.log(`\x1b[32m\x1b[1m  π PaiCLI\x1b[0m v${version}`)
-    console.log('  Terminal AI Agent\n')
+    const status = this.status
+    const model = status?.model ?? 'unknown'
+    const provider = status?.provider ? ` (${status.provider})` : ''
+    const mcp = `${status?.connectedMcpServers ?? 0}/${status?.mcpServers ?? 0}`
+    const skills = `${status?.loadedSkills ?? 0}/${status?.skills ?? 0}`
+    const mode = status?.agentMode ?? 'ReAct'
+
+    console.log()
+    console.log(`  \x1b[92m\x1b[1m██████╗ \x1b[0m  \x1b[1mPaiCLI \x1b[92mπ\x1b[0m  \x1b[90mv${version}\x1b[0m`)
+    console.log(`  \x1b[92m\x1b[1m╚═██╔═╝\x1b[0m  \x1b[90mModel\x1b[0m ${model}${provider}`)
+    console.log(`  \x1b[92m\x1b[1m  ██║  \x1b[0m  \x1b[90mMCP\x1b[0m ${mcp} · \x1b[90m${status?.toolCount ?? 0} tools\x1b[0m · ${skills} skills · ${mode}`)
+    console.log(`  \x1b[92m\x1b[1m  ██║  \x1b[0m  \x1b[90mReAct · Plan · MCP · Browser · Image · Tools · Memory · RAG\x1b[0m`)
+    console.log(`  \x1b[92m\x1b[1m  ╚═╝  \x1b[0m`)
+    console.log()
+    console.log('Tips for getting started:')
+    console.log('1. Type / for commands and Tab completion')
+    console.log('2. Ask coding questions, edit code or run commands')
+    console.log('3. Attach context with @path or @image')
+    console.log()
   }
 
   showPrompt(): void {
-    // 由 Ink 组件处理
+    if (this.status) {
+      this.renderStatusBar(this.status)
+    }
   }
 
   beginThinking(): void {
@@ -86,7 +106,7 @@ export class InlineRenderer implements Renderer {
   }
 
   showStatus(_status: StatusInfo): void {
-    // 由 Ink StatusBar 组件处理
+    this.status = _status
   }
 
   async requestApproval(_request: ApprovalRequest): Promise<ApprovalResult> {
@@ -97,7 +117,7 @@ export class InlineRenderer implements Renderer {
   async readInput(): Promise<string> {
     const readline = await import('node:readline')
     return new Promise((resolve) => {
-      process.stdout.write('\x1b[32m\x1b[1mπ\x1b[0m ')
+      process.stdout.write('\x1b[35m>\x1b[0m ')
       const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
       rl.question('', (answer) => {
         rl.close()
@@ -109,4 +129,43 @@ export class InlineRenderer implements Renderer {
   clear(): void {
     console.clear()
   }
+
+  private renderStatusBar(status: StatusInfo): void {
+    const width = process.stdout.columns && process.stdout.columns > 40 ? process.stdout.columns : 100
+    const divider = '─'.repeat(Math.min(width, 140))
+    const contextPercent = status.tokenLimit > 0
+      ? Math.min(100, Math.round((status.tokensUsed / status.tokenLimit) * 100))
+      : 0
+    const provider = status.provider ? ` (${status.provider})` : ''
+    const ctx = `${contextPercent}% (${formatCompact(status.tokensUsed)}/${formatCompact(status.tokenLimit)})`
+    const cwd = compactPath(status.cwd ?? process.cwd())
+    const hitl = status.hitlMode ?? 'auto'
+    const memory = status.memoryEnabled ? 'Memory' : 'Memory off'
+
+    console.log(divider)
+    console.log(
+      `\x1b[93mYOLO Ctrl+Y to enable HITL\x1b[0m    ` +
+      `\x1b[38;5;213m${status.loadedSkills ?? 0} skills\x1b[0m · ` +
+      `\x1b[38;5;147m${status.connectedMcpServers ?? 0} MCP servers\x1b[0m`,
+    )
+    console.log(
+      `\x1b[38;5;213mAuto Model\x1b[0m · \x1b[38;5;147m${status.model}${provider}\x1b[0m ` +
+      `\x1b[92m${status.statusText ?? 'idle'}\x1b[0m · ` +
+      `\x1b[36mctx\x1b[0m \x1b[92m${ctx}\x1b[0m · ` +
+      `turns ${status.conversationTurns ?? 0} · ${memory} · hitl ${hitl} · ${cwd}`,
+    )
+  }
+}
+
+function formatCompact(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 1)}M`
+  if (value >= 1_000) return `${(value / 1_000).toFixed(value % 1_000 === 0 ? 0 : 1)}k`
+  return String(value)
+}
+
+function compactPath(path: string): string {
+  const home = process.env.HOME
+  const normalized = home && path.startsWith(home) ? `~${path.slice(home.length)}` : path
+  if (normalized.length <= 48) return normalized
+  return `…${normalized.slice(-47)}`
 }

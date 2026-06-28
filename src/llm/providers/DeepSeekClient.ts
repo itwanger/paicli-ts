@@ -12,6 +12,9 @@ export const DEEPSEEK_MODELS: Record<string, { maxContext: number }> = {
   'deepseek-chat': { maxContext: 64_000 },
   'deepseek-reasoner': { maxContext: 64_000 },
   'deepseek-coder': { maxContext: 128_000 },
+  'deepseek-v3': { maxContext: 128_000 },
+  'deepseek-v4': { maxContext: 1_000_000 },
+  'deepseek-v4-pro': { maxContext: 1_000_000 },
 }
 
 /**

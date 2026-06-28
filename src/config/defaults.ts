@@ -35,7 +35,7 @@ export const DEFAULT_CONFIG: PaiCliConfig = {
     longTermEnabled: true,
     longTermDbPath: '~/.paicli/memory.db',
     tokenBudgetMode: 'balanced',
-    compressionThreshold: 0.8,
+    compressionThreshold: 0.96,
   },
 
   policy: {

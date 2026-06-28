@@ -8,17 +8,26 @@ import type { ToolResult } from '../types/tool.js'
 
 export class PlainRenderer implements Renderer {
   readonly mode = 'plain' as const
+  private status: StatusInfo | null = null
 
   async start(): Promise<void> {}
   async stop(): Promise<void> {}
 
   showWelcome(version: string): void {
+    const model = this.status?.model ?? 'unknown'
+    const provider = this.status?.provider ? ` (${this.status.provider})` : ''
     console.log(`PaiCLI v${version} — Terminal AI Agent`)
-    console.log('Type your message or /help for commands.\n')
+    console.log(`Model ${model}${provider}`)
+    console.log('Type /help for commands.\n')
   }
 
   showPrompt(): void {
-    process.stdout.write('> ')
+    if (this.status) {
+      const percent = this.status.tokenLimit > 0
+        ? Math.min(100, Math.round((this.status.tokensUsed / this.status.tokenLimit) * 100))
+        : 0
+      console.log(`[${this.status.statusText ?? 'idle'}] model=${this.status.model} ctx=${percent}% turns=${this.status.conversationTurns ?? 0}`)
+    }
   }
 
   beginThinking(): void {
@@ -74,7 +83,7 @@ export class PlainRenderer implements Renderer {
   }
 
   showStatus(_status: StatusInfo): void {
-    // 纯文本模式不显示状态栏
+    this.status = _status
   }
 
   async requestApproval(request: ApprovalRequest): Promise<ApprovalResult> {

@@ -73,6 +73,8 @@ export interface Renderer {
 export interface StatusInfo {
   /** 当前模型 */
   model: string
+  /** 当前 Provider */
+  provider?: string
   /** Token 使用量 */
   tokensUsed: number
   /** Token 总量限制 */
@@ -81,6 +83,26 @@ export interface StatusInfo {
   agentMode: string
   /** 当前状态文本 */
   statusText?: string
+  /** 当前工作目录 */
+  cwd?: string
+  /** 可用工具数 */
+  toolCount?: number
+  /** MCP 服务总数 */
+  mcpServers?: number
+  /** 已连接 MCP 服务数 */
+  connectedMcpServers?: number
+  /** Skill 总数 */
+  skills?: number
+  /** 已加载 Skill 数 */
+  loadedSkills?: number
+  /** HITL 模式 */
+  hitlMode?: string
+  /** 是否启用记忆 */
+  memoryEnabled?: boolean
+  /** 压缩阈值百分比 */
+  compressionThresholdPercent?: number
+  /** 对话轮数 */
+  conversationTurns?: number
 }
 
 /** HITL 审批请求 */

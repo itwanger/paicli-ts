@@ -11,13 +11,25 @@ export interface SlashCommand {
 export interface CommandContext {
   cwd: string
   config: Record<string, unknown>
-  setModel?: (model: string) => void
+  setModel?: (model: string, provider?: string) => ModelStatus
+  getModelStatus?: () => ModelStatus
   clearHistory?: () => void
   exit?: () => void
   /** 切换到 plan 模式 */
   setPlanMode?: (enabled: boolean) => void
   /** 切换到 team 模式 */
   setTeamMode?: (enabled: boolean) => void
+}
+
+export interface ModelStatus {
+  provider: string
+  model: string
+  contextWindow: number
+  compressionThreshold: number
+  shortTermMemoryBudget: number
+  mcpResourceIndex: boolean
+  promptCache: string
+  conversationTurns: number
 }
 
 class CommandRegistry {
@@ -78,13 +90,29 @@ commandRegistry.register({
 
 commandRegistry.register({
   name: 'model',
-  description: 'Show or switch model: /model [name]',
+  description: 'Show or switch model: /model [model] or /model [provider/model]',
   async execute(args, ctx) {
     if (args.length > 0) {
-      ctx.setModel?.(args[0])
-      return `Switched to model: ${args[0]}`
+      const parsed = parseModelArgs(args, ctx.config)
+      const status = ctx.setModel?.(parsed.model, parsed.provider) ?? ctx.getModelStatus?.()
+      if (!status) return `Switched to model: ${parsed.model}`
+      return formatModelStatus(status, true)
     }
-    return `Current model: ${ctx.config.model ?? 'unknown'}`
+    const status = ctx.getModelStatus?.()
+    if (!status) {
+      return `Current model: ${ctx.config.model ?? 'unknown'}`
+    }
+    return formatModelStatus(status, false)
+  },
+})
+
+commandRegistry.register({
+  name: 'status',
+  description: 'Show model and context status',
+  async execute(_args, ctx) {
+    const status = ctx.getModelStatus?.()
+    if (!status) return 'Status unavailable.'
+    return formatModelStatus(status, false)
   },
 })
 
@@ -127,6 +155,35 @@ commandRegistry.register({
     return `Memory: conversation turns: ${ctx.config.conversationTurns ?? 0}, long-term entries: ${ctx.config.memoryEntries ?? 0}`
   },
 })
+
+function parseModelArgs(args: string[], config: Record<string, unknown>): { provider: string; model: string } {
+  const first = args[0]
+  if (!first) {
+    return {
+      provider: String(config.provider ?? 'deepseek'),
+      model: String(config.model ?? 'deepseek-chat'),
+    }
+  }
+  if (first.includes('/')) {
+    const [provider, model] = first.split('/', 2)
+    return { provider: provider || 'deepseek', model: model || 'deepseek-chat' }
+  }
+  if (args.length >= 2) {
+    return { provider: first, model: args[1] }
+  }
+  const inferredProvider = first.startsWith('deepseek') ? 'deepseek' : String(config.provider ?? 'deepseek')
+  return { provider: inferredProvider, model: first }
+}
+
+function formatModelStatus(status: ModelStatus, switched: boolean): string {
+  const prefix = switched ? '✅ 已切换到' : '当前模型'
+  const compressionPercent = Math.round(status.compressionThreshold * 100)
+  return [
+    `${prefix}: ${status.model} (${status.provider})`,
+    `上下文策略: window: ${status.contextWindow} | 压缩阈值: ${compressionPercent}% (${Math.floor(status.contextWindow * status.compressionThreshold)} tokens) | 短期记忆预算: ${status.shortTermMemoryBudget} | MCP resource 索引: ${status.mcpResourceIndex ? 'on' : 'off'} | prompt cache: ${status.promptCache}`,
+    `对话上下文已保留: ${status.conversationTurns} turns，使用 /clear 可清空`,
+  ].join('\n')
+}
 
 commandRegistry.register({
   name: 'mcp',
