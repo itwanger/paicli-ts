@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { PassThrough } from 'node:stream'
 import { commandRegistry, type ModelStatus } from '../../src/commands/index.js'
-import { InlineRenderer } from '../../src/render/InlineRenderer.js'
+import { applyPromptInput, InlineRenderer } from '../../src/render/InlineRenderer.js'
 import { createLlmClient } from '../../src/llm/index.js'
 import { LineReader } from '../../src/render/LineReader.js'
 import { parseInlineMarkdown, parseMarkdownBlocks } from '../../src/render/MarkdownText.js'
@@ -57,7 +57,11 @@ describe('slash commands and terminal UI', () => {
 
   it('uses the Java-like welcome and status bar details', () => {
     const renderer = new InlineRenderer()
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const writes: string[] = []
+    const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString())
+      return true
+    })
 
     renderer.showStatus({
       model: 'deepseek-v4-pro',
@@ -79,8 +83,8 @@ describe('slash commands and terminal UI', () => {
     renderer.showWelcome('0.1.0')
     renderer.showPrompt()
 
-    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n')
-    logSpy.mockRestore()
+    const output = writes.join('')
+    writeSpy.mockRestore()
 
     expect(output).toContain('PaiCLI')
     expect(output).toContain('deepseek-v4-pro (deepseek)')
@@ -141,5 +145,10 @@ describe('slash commands and terminal UI', () => {
       { type: 'text', text: ' ' },
       { type: 'link', label: 'link', url: 'https://example.com' },
     ])
+  })
+
+  it('does not drop IME text when it arrives with return', () => {
+    expect(applyPromptInput('', '你好\r', { return: true })).toEqual({ value: '', submit: '你好' })
+    expect(applyPromptInput('联', '网查一下\n', { return: true })).toEqual({ value: '', submit: '联网查一下' })
   })
 })

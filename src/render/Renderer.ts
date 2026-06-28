@@ -1,6 +1,6 @@
 /**
  * PaiCLI 渲染器接口
- * 支持 InlineRenderer (Ink TUI) 和 PlainRenderer (纯文本)
+ * 支持 InlineRenderer (交互式终端) 和 PlainRenderer (纯文本)
  */
 
 import type { StreamEvent } from '../llm/types.js'

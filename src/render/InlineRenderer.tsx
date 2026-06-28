@@ -1,63 +1,29 @@
 /**
- * Ink renderer for interactive terminal sessions.
+ * Append-only terminal renderer for interactive sessions.
  *
- * The layout mirrors Claude Code's fullscreen shape at a smaller scale:
- * transcript scroll area above, prompt input above the pinned footer, and
- * status/footer chrome fixed at the bottom.
+ * Completed transcript blocks are written once to the terminal scrollback.
+ * Only the prompt/footer area is transient, so scrolling back shows previous
+ * turns instead of Ink repaint frames.
  */
-import React, { useEffect, useMemo, useState } from 'react'
-import { Box, Text, render, useInput, type Instance } from 'ink'
 import type { Renderer, StatusInfo, ApprovalRequest, ApprovalResult } from './Renderer.js'
 import type { StreamEvent } from '../llm/types.js'
 import type { ToolResult } from '../types/tool.js'
 import { LineReader } from './LineReader.js'
-import { MarkdownText } from './MarkdownText.js'
+import { parseInlineMarkdown, parseMarkdownBlocks } from './MarkdownParser.js'
 
-type TranscriptKind = 'welcome' | 'user' | 'assistant' | 'thinking' | 'tool' | 'tool_result' | 'error' | 'command'
+type LiveKind = 'assistant' | 'thinking' | null
 
-interface TranscriptItem {
-  id: number
-  kind: TranscriptKind
-  text: string
-  title?: string
-  isError?: boolean
+interface PromptKey {
+  return?: boolean
+  backspace?: boolean
+  delete?: boolean
+  ctrl?: boolean
+  meta?: boolean
 }
 
-interface TuiState {
-  version: string
-  status: StatusInfo | null
-  items: TranscriptItem[]
-  inputActive: boolean
-  inputValue: string
-}
-
-type Listener = (state: TuiState) => void
-
-class TuiStore {
-  private state: TuiState = {
-    version: '',
-    status: null,
-    items: [],
-    inputActive: false,
-    inputValue: '',
-  }
-
-  private listeners = new Set<Listener>()
-
-  getState(): TuiState {
-    return this.state
-  }
-
-  subscribe(listener: Listener): () => void {
-    this.listeners.add(listener)
-    listener(this.state)
-    return () => this.listeners.delete(listener)
-  }
-
-  update(updater: (state: TuiState) => TuiState): void {
-    this.state = updater(this.state)
-    for (const listener of this.listeners) listener(this.state)
-  }
+interface PromptInputUpdate {
+  value: string
+  submit?: string
 }
 
 /**
@@ -66,121 +32,137 @@ class TuiStore {
  */
 export class InlineRenderer implements Renderer {
   readonly mode = 'inline' as const
-  private instance: Instance | null = null
   private status: StatusInfo | null = null
-  private readonly store = new TuiStore()
-  private nextId = 1
+  private version = ''
+  private tuiActive = false
+  private inputActive = false
+  private inputValue = ''
+  private queuedInput = ''
   private pendingResolve: ((value: string) => void) | null = null
-  private currentAssistantId: number | null = null
-  private currentThinkingId: number | null = null
   private legacyLineReader: LineReader | null = null
+  private transientRows = 0
+  private transientPromptOffset = 0
+  private liveKind: LiveKind = null
+  private liveText = ''
+  private readonly inputHandler = (chunk: Buffer) => this.handleInputData(chunk)
 
   async start(): Promise<void> {
     if (!this.canUseTui()) return
-    if (this.status) {
-      this.store.update((state) => ({ ...state, status: this.status }))
-    }
-    this.instance = render(
-      <PaiCliTui
-        store={this.store}
-        onSubmit={(value) => this.submitInput(value)}
-      />,
-      { exitOnCtrlC: false },
-    )
+    this.tuiActive = true
+    process.stdin.setRawMode?.(true)
+    process.stdin.resume()
+    process.stdin.on('data', this.inputHandler)
+    process.stdout.write('\x1B[?25h')
   }
 
   async stop(): Promise<void> {
     this.legacyLineReader?.close()
     this.legacyLineReader = null
-    this.instance?.unmount()
-    this.instance = null
+
+    if (this.tuiActive) {
+      this.flushLiveBlock()
+      this.clearTransient()
+      process.stdin.off('data', this.inputHandler)
+      process.stdin.setRawMode?.(false)
+      process.stdin.pause()
+      process.stdout.write('\x1B[?25h')
+    }
+
+    this.tuiActive = false
   }
 
   showWelcome(version: string): void {
-    if (!this.isTuiActive()) {
+    this.version = version
+    if (!this.tuiActive) {
       this.renderLegacyWelcome(version)
       return
     }
-    this.store.update((state) => ({
-      ...state,
-      version,
-      items: capItems([...state.items, this.createItem('welcome', '')]),
-    }))
+    this.writeHistoryBlock(renderWelcomePanel(version, this.status))
   }
 
   showPrompt(): void {
-    if (!this.isTuiActive() && this.status) {
-      this.renderLegacyStatusBar(this.status)
+    if (!this.tuiActive) {
+      if (this.status) this.renderLegacyStatusBar(this.status)
+      return
     }
+    this.redrawTransient()
   }
 
   beginThinking(): void {
-    if (!this.isTuiActive()) {
+    if (!this.tuiActive) {
       process.stdout.write('\x1b[34mThinking...\x1b[0m')
       return
     }
-    this.currentAssistantId = null
-    this.currentThinkingId = this.appendItem('thinking', '', 'Thinking')
+    this.flushLiveBlock()
+    this.liveKind = 'thinking'
+    this.liveText = ''
+    this.redrawTransient()
   }
 
   appendThinking(text: string): void {
-    if (!this.isTuiActive()) return
-    if (this.currentThinkingId === null) this.beginThinking()
-    this.appendToItem(this.currentThinkingId, text)
+    if (!this.tuiActive) return
+    if (this.liveKind !== 'thinking') this.beginThinking()
+    this.liveText += text
+    this.redrawTransient()
   }
 
   endThinking(): void {
-    if (!this.isTuiActive()) {
+    if (!this.tuiActive) {
       process.stdout.write('\r\x1b[K')
       return
     }
-    this.currentThinkingId = null
+    this.flushLiveBlock()
   }
 
-  beginText(): void {}
+  beginText(): void {
+    if (!this.tuiActive) return
+    this.flushLiveBlock()
+    this.liveKind = 'assistant'
+    this.liveText = ''
+    this.redrawTransient()
+  }
 
   appendText(text: string): void {
-    if (!this.isTuiActive()) {
+    if (!this.tuiActive) {
       process.stdout.write(text)
       return
     }
-    if (this.currentAssistantId === null) {
-      this.currentAssistantId = this.appendItem('assistant', '')
+    if (this.liveKind !== 'assistant') {
+      this.flushLiveBlock()
+      this.liveKind = 'assistant'
+      this.liveText = ''
     }
-    this.appendToItem(this.currentAssistantId, text)
+    this.liveText += text
+    this.redrawTransient()
   }
 
   endText(): void {
-    if (!this.isTuiActive()) {
-      console.log()
+    if (!this.tuiActive) {
+      process.stdout.write('\n')
       return
     }
-    this.currentAssistantId = null
-    this.currentThinkingId = null
+    this.flushLiveBlock()
   }
 
   showToolCall(name: string, input: Record<string, unknown>): void {
     const summary = summarizeToolInput(input)
-    this.currentAssistantId = null
-    this.currentThinkingId = null
-    if (!this.isTuiActive()) {
-      console.log(`\x1b[33m> ${name}\x1b[0m(${summary})`)
+    if (!this.tuiActive) {
+      process.stdout.write(`\x1b[33m> ${name}\x1b[0m(${summary})\n`)
       return
     }
-    this.appendItem('tool', summary, name)
+    this.flushLiveBlock()
+    this.writeHistoryBlock(renderToolCall(name, summary))
   }
 
   showToolResult(result: ToolResult): void {
     const title = result.displaySummary ?? (result.isError ? 'Tool error' : 'Tool result')
-    const summary = result.content.slice(0, 1_200)
-    this.currentAssistantId = null
-    this.currentThinkingId = null
-    if (!this.isTuiActive()) {
-      if (result.isError) console.log(`\x1b[31merror\x1b[0m ${summary}`)
-      else console.log(`\x1b[36mdone\x1b[0m ${summary}`)
+    if (!this.tuiActive) {
+      if (result.isError) process.stderr.write(`\x1b[31merror\x1b[0m ${result.content}\n`)
+      else process.stdout.write(`\x1b[36mdone\x1b[0m ${result.content}\n`)
       return
     }
-    this.appendItem('tool_result', summary, title, result.isError)
+    this.flushLiveBlock()
+    this.writeHistoryBlock(renderToolResult(title, result.content, Boolean(result.isError)))
   }
 
   handleStreamEvent(event: StreamEvent): void {
@@ -201,25 +183,26 @@ export class InlineRenderer implements Renderer {
   }
 
   showError(error: Error): void {
-    if (!this.isTuiActive()) {
-      console.error(`\x1b[31mError: ${error.message}\x1b[0m`)
+    if (!this.tuiActive) {
+      process.stderr.write(`\x1b[31mError: ${error.message}\x1b[0m\n`)
       return
     }
-    this.appendItem('error', error.message, 'Error', true)
+    this.flushLiveBlock()
+    this.writeHistoryBlock(`${red(`Error: ${error.message}`)}\n`)
   }
 
   showOutput(text: string): void {
-    if (!this.isTuiActive()) {
-      console.log(text)
+    if (!this.tuiActive) {
+      process.stdout.write(`${text}\n`)
       return
     }
-    this.appendItem('command', text)
+    this.flushLiveBlock()
+    this.writeHistoryBlock(`${green(renderMarkdownAnsi(text))}\n`)
   }
 
   showStatus(status: StatusInfo): void {
     this.status = status
-    if (!this.isTuiActive()) return
-    this.store.update((state) => ({ ...state, status }))
+    if (this.tuiActive) this.redrawTransient()
   }
 
   async requestApproval(_request: ApprovalRequest): Promise<ApprovalResult> {
@@ -227,77 +210,147 @@ export class InlineRenderer implements Renderer {
   }
 
   async readInput(): Promise<string> {
-    if (!this.isTuiActive()) {
+    if (!this.tuiActive) {
       return this.readLegacyInput('\x1b[35m>\x1b[0m ')
     }
 
     return new Promise((resolve) => {
       this.pendingResolve = resolve
-      this.store.update((state) => ({
-        ...state,
-        inputActive: true,
-        inputValue: '',
-      }))
+      this.inputActive = true
+      this.inputValue = ''
+      this.redrawTransient()
+      if (this.queuedInput) {
+        const queued = this.queuedInput
+        this.queuedInput = ''
+        this.handleInputText(queued)
+      }
     })
   }
 
   clear(): void {
-    if (!this.isTuiActive()) {
-      console.clear()
+    if (!this.tuiActive) {
+      process.stdout.write('\x1B[2J\x1B[3J\x1B[H')
       return
     }
-    this.currentAssistantId = null
-    this.currentThinkingId = null
-    this.store.update((state) => ({ ...state, items: [] }))
+    this.flushLiveBlock()
+    this.clearTransient()
+    process.stdout.write('\x1B[2J\x1B[3J\x1B[H')
+    this.redrawTransient()
   }
 
-  private submitInput(value: string): void {
+  private submitInput(rawValue: string): void {
     const resolve = this.pendingResolve
     if (!resolve) return
+
     this.pendingResolve = null
-    const trimmed = value.trim()
-    this.store.update((state) => ({
-      ...state,
-      inputActive: false,
-      inputValue: '',
-      items: trimmed ? capItems([...state.items, this.createItem('user', trimmed)]) : state.items,
-    }))
-    resolve(trimmed)
+    this.inputActive = false
+    this.inputValue = ''
+    const value = rawValue.trim()
+
+    if (value) {
+      this.writeHistoryBlock(renderUserInput(value))
+    } else {
+      this.redrawTransient()
+    }
+
+    resolve(value)
   }
 
-  private appendItem(kind: TranscriptKind, text: string, title?: string, isError?: boolean): number {
-    const item = this.createItem(kind, text, title, isError)
-    this.store.update((state) => ({
-      ...state,
-      items: capItems([...state.items, item]),
-    }))
-    return item.id
+  private flushLiveBlock(): void {
+    if (!this.liveKind || !this.liveText.trim()) {
+      this.liveKind = null
+      this.liveText = ''
+      return
+    }
+
+    const text = this.liveText
+    const kind = this.liveKind
+    this.liveKind = null
+    this.liveText = ''
+
+    if (kind === 'thinking') {
+      this.writeHistoryBlock(renderThinking(text))
+    } else {
+      this.writeHistoryBlock(renderAssistant(text))
+    }
   }
 
-  private appendToItem(id: number | null, text: string): void {
-    if (id === null || text.length === 0) return
-    this.store.update((state) => ({
-      ...state,
-      items: state.items.map((item) => item.id === id ? { ...item, text: item.text + text } : item),
-    }))
+  private writeHistoryBlock(text: string): void {
+    this.clearTransient()
+    process.stdout.write(text.endsWith('\n') ? text : `${text}\n`)
+    this.redrawTransient()
   }
 
-  private createItem(kind: TranscriptKind, text: string, title?: string, isError?: boolean): TranscriptItem {
-    return {
-      id: this.nextId++,
-      kind,
-      text,
-      title,
-      isError,
+  private redrawTransient(): void {
+    if (!this.tuiActive) return
+    this.clearTransient()
+    this.drawTransient()
+  }
+
+  private drawTransient(): void {
+    if (!this.tuiActive) return
+
+    const columns = getColumns()
+    const previewLines = renderLivePreview(this.liveKind, this.liveText, columns)
+    const prompt = buildPromptLine(this.inputValue, this.inputActive, columns)
+    const footer = buildFooterLines(this.status, columns)
+    const lines = [
+      ...previewLines,
+      prompt.line,
+      dim('─'.repeat(columns)),
+      footer.first,
+      footer.second,
+    ]
+
+    process.stdout.write(lines.join('\n'))
+    this.transientRows = lines.length
+    this.transientPromptOffset = previewLines.length
+    process.stdout.write(`\x1B[3F\r${prompt.cursorColumn > 1 ? `\x1B[${prompt.cursorColumn - 1}C` : ''}\x1B[?25h`)
+  }
+
+  private clearTransient(): void {
+    if (!this.tuiActive || this.transientRows === 0) return
+    if (this.transientPromptOffset > 0) {
+      process.stdout.write(`\x1B[${this.transientPromptOffset}F`)
+    }
+    process.stdout.write('\r\x1B[J')
+    this.transientRows = 0
+    this.transientPromptOffset = 0
+  }
+
+  private handleInputData(chunk: Buffer): void {
+    const value = chunk.toString('utf8')
+    if (!this.inputActive) {
+      this.queuedInput += value
+      return
+    }
+    this.handleInputText(value)
+  }
+
+  private handleInputText(value: string): void {
+    for (let index = 0; index < value.length; index++) {
+      const char = value[index]
+
+      if (char === '\u0003') {
+        this.queuedInput = value.slice(index + 1) + this.queuedInput
+        this.submitInput('/exit')
+        return
+      }
+
+      if (char === '\r' || char === '\n') {
+        this.queuedInput = value.slice(index + 1) + this.queuedInput
+        this.submitInput(this.inputValue)
+        return
+      }
+
+      const update = applyPromptInput(this.inputValue, char, {})
+      this.inputValue = update.value
+      this.redrawTransient()
     }
   }
 
   private canUseTui(): boolean {
     return Boolean(process.stdin.isTTY && process.stdout.isTTY)
-  }
-
-  private isTuiActive(): boolean {
-    return this.instance !== null
   }
 
   private async readLegacyInput(prompt: string): Promise<string> {
@@ -312,296 +365,155 @@ export class InlineRenderer implements Renderer {
   }
 
   private renderLegacyWelcome(version: string): void {
-    const status = this.status
-    const model = status?.model ?? 'unknown'
-    const provider = status?.provider ? ` (${status.provider})` : ''
-    const mcp = `${status?.connectedMcpServers ?? 0}/${status?.mcpServers ?? 0}`
-    const skills = `${status?.loadedSkills ?? 0}/${status?.skills ?? 0}`
-    const mode = status?.agentMode ?? 'ReAct'
-
-    console.log()
-    console.log(`  \x1b[92m\x1b[1m██████╗ \x1b[0m  \x1b[1mPaiCLI \x1b[92mπ\x1b[0m  \x1b[90mv${version}\x1b[0m`)
-    console.log(`  \x1b[92m\x1b[1m  ██  ██╗\x1b[0m  \x1b[90mModel\x1b[0m ${model}${provider}`)
-    console.log(`  \x1b[92m\x1b[1m  ██  ██║\x1b[0m  \x1b[90mMCP\x1b[0m ${mcp} · \x1b[90m${status?.toolCount ?? 0} tools\x1b[0m · ${skills} skills · ${mode}`)
-    console.log(`  \x1b[92m\x1b[1m  ██  ██║\x1b[0m  \x1b[90mReAct · Plan · MCP · Browser · Image · Tools · Memory · RAG\x1b[0m`)
-    console.log(`  \x1b[92m\x1b[1m  ╚╝  ╚╝\x1b[0m`)
-    console.log()
-    console.log('Tips for getting started:')
-    console.log('1. Type / for commands and Tab completion')
-    console.log('2. Ask coding questions, edit code or run commands')
-    console.log('3. Attach context with @path or @image')
-    console.log()
+    process.stdout.write(renderWelcomePanel(version, this.status))
   }
 
   private renderLegacyStatusBar(status: StatusInfo): void {
-    const width = process.stdout.columns && process.stdout.columns > 40 ? process.stdout.columns : 100
-    const divider = '─'.repeat(Math.min(width, 140))
-    const contextPercent = getContextPercent(status)
-    const provider = status.provider ? ` (${status.provider})` : ''
-    const ctx = `${contextPercent}% (${formatCompact(status.tokensUsed)}/${formatCompact(status.tokenLimit)})`
-    const cwd = compactPath(status.cwd ?? process.cwd())
-    const hitl = status.hitlMode ?? 'auto'
-    const memory = status.memoryEnabled ? 'Memory' : 'Memory off'
-
-    console.log(divider)
-    console.log(
-      `\x1b[93mYOLO Ctrl+Y to enable HITL\x1b[0m    ` +
-      `\x1b[38;5;213m${status.loadedSkills ?? 0} skills\x1b[0m · ` +
-      `\x1b[38;5;147m${status.connectedMcpServers ?? 0} MCP servers\x1b[0m`,
-    )
-    console.log(
-      `\x1b[38;5;213mAuto Model\x1b[0m · \x1b[38;5;147m${status.model}${provider}\x1b[0m ` +
-      `\x1b[92m${status.statusText ?? 'idle'}\x1b[0m · ` +
-      `\x1b[36mctx\x1b[0m \x1b[92m${ctx}\x1b[0m · ` +
-      `turns ${status.conversationTurns ?? 0} · ${memory} · hitl ${hitl} · ${cwd}`,
-    )
+    const columns = getColumns()
+    const footer = buildFooterLines(status, columns)
+    process.stdout.write(`${dim('─'.repeat(columns))}\n${footer.first}\n${footer.second}\n`)
   }
 }
 
-function PaiCliTui({ store, onSubmit }: { store: TuiStore; onSubmit: (value: string) => void }): React.ReactElement {
-  const state = useStoreState(store)
-  const size = useTerminalSize()
-  const transcriptRows = Math.max(4, size.rows - 5)
-  const visibleItems = useMemo(
-    () => state.items.slice(-Math.max(4, transcriptRows)),
-    [state.items, transcriptRows],
-  )
-
-  useInput((input, key) => {
-    if (!state.inputActive) return
-    if (key.ctrl && input.toLowerCase() === 'c') {
-      onSubmit('/exit')
-      return
-    }
-    if (key.return) {
-      onSubmit(state.inputValue)
-      return
-    }
-    if (key.backspace || key.delete) {
-      store.update((current) => ({ ...current, inputValue: current.inputValue.slice(0, -1) }))
-      return
-    }
-    if (!key.ctrl && !key.meta && input) {
-      store.update((current) => ({ ...current, inputValue: current.inputValue + input }))
-    }
-  })
-
-  return (
-    <Box flexDirection="column" height={size.rows} width="100%" overflow="hidden">
-      <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingX={1}>
-        {visibleItems.map((item) => <TranscriptRow key={item.id} item={item} status={state.status} version={state.version} />)}
-        <Box flexGrow={1} />
-      </Box>
-      <Box flexDirection="column" flexShrink={0} width="100%">
-        <PromptLine value={state.inputValue} active={state.inputActive} />
-        <Footer status={state.status} columns={size.columns} />
-      </Box>
-    </Box>
-  )
-}
-
-function useStoreState(store: TuiStore): TuiState {
-  const [state, setState] = useState(store.getState())
-  useEffect(() => store.subscribe(setState), [store])
-  return state
-}
-
-function useTerminalSize(): { columns: number; rows: number } {
-  const readSize = () => ({
-    columns: process.stdout.columns && process.stdout.columns > 20 ? process.stdout.columns : 100,
-    rows: process.stdout.rows && process.stdout.rows > 8 ? process.stdout.rows : 30,
-  })
-  const [size, setSize] = useState(readSize)
-  useEffect(() => {
-    const onResize = () => setSize(readSize())
-    process.stdout.on('resize', onResize)
-    return () => {
-      process.stdout.off('resize', onResize)
-    }
-  }, [])
-  return size
-}
-
-function TranscriptRow({ item, status, version }: { item: TranscriptItem; status: StatusInfo | null; version: string }): React.ReactElement {
-  if (item.kind === 'welcome') return <WelcomePanel status={status} version={version} />
-  if (item.kind === 'user') {
-    return (
-      <Box marginTop={1}>
-        <Text color="magenta">{'>'} </Text>
-        <Text bold>{item.text}</Text>
-      </Box>
-    )
-  }
-  if (item.kind === 'assistant') {
-    return (
-      <Box marginTop={1}>
-        <MarkdownText text={item.text} />
-      </Box>
-    )
-  }
-  if (item.kind === 'thinking') {
-    return (
-      <Box marginTop={1} flexDirection="column">
-        <Text color="blue">∴ Thinking</Text>
-        {item.text ? (
-          <Box paddingLeft={2}>
-            <MarkdownText text={item.text} dimColor maxLines={6} />
-          </Box>
-        ) : null}
-      </Box>
-    )
-  }
-  if (item.kind === 'tool') {
-    return (
-      <Box marginTop={1} flexDirection="column">
-        <Text wrap="wrap">
-          <Text color="yellow">⚡ Tool call</Text>
-          <Text dimColor> · </Text>
-          <Text bold>{item.title ?? 'tool'}</Text>
-          {item.text ? <Text dimColor>  {item.text}</Text> : null}
-        </Text>
-      </Box>
-    )
-  }
-  if (item.kind === 'tool_result') {
-    return (
-      <Box marginTop={1} flexDirection="column">
-        <Text>
-          <Text color={item.isError ? 'red' : 'cyan'}>{item.isError ? '✗ Tool error' : '✓ Tool result'}</Text>
-          {item.title ? <Text dimColor> · {item.title}</Text> : null}
-        </Text>
-        {item.text ? (
-          <Box paddingLeft={2}>
-            <MarkdownText text={item.text} dimColor maxLines={6} />
-          </Box>
-        ) : null}
-      </Box>
-    )
-  }
-  if (item.kind === 'error') {
-    return (
-      <Box marginTop={1}>
-        <Text color="red">Error: {item.text}</Text>
-      </Box>
-    )
-  }
-  return (
-    <Box marginTop={1}>
-      <Text color="green" wrap="wrap">{item.text}</Text>
-    </Box>
-  )
-}
-
-function WelcomePanel({ status, version }: { status: StatusInfo | null; version: string }): React.ReactElement {
+function renderWelcomePanel(version: string, status: StatusInfo | null): string {
   const model = status?.model ?? 'unknown'
   const provider = status?.provider ? ` (${status.provider})` : ''
   const mcp = `${status?.connectedMcpServers ?? 0}/${status?.mcpServers ?? 0}`
   const skills = `${status?.loadedSkills ?? 0}/${status?.skills ?? 0}`
   const mode = status?.agentMode ?? 'ReAct'
 
-  return (
-    <Box flexDirection="column" marginTop={1}>
-      <Box>
-        <Text color="green" bold>██████╗  </Text>
-        <Text bold>PaiCLI </Text>
-        <Text color="green">π </Text>
-        <Text dimColor>v{version}</Text>
-      </Box>
-      <Box>
-        <Text color="green" bold>  ██  ██╗  </Text>
-        <Text dimColor>Model </Text>
-        <Text>{model}{provider}</Text>
-      </Box>
-      <Box>
-        <Text color="green" bold>  ██  ██║  </Text>
-        <Text dimColor>MCP </Text>
-        <Text>{mcp} · {status?.toolCount ?? 0} tools · {skills} skills · {mode}</Text>
-      </Box>
-      <Box>
-        <Text color="green" bold>  ╚╝  ╚╝   </Text>
-        <Text dimColor>ReAct · Plan · MCP · Browser · Image · Tools · Memory · RAG</Text>
-      </Box>
-      <Box marginTop={1} flexDirection="column">
-        <Text>Tips for getting started:</Text>
-        <Text>1. Type / for commands and Tab completion</Text>
-        <Text>2. Ask coding questions, edit code or run commands</Text>
-        <Text>3. Attach context with @path or @image</Text>
-      </Box>
-    </Box>
-  )
+  return [
+    '',
+    `  ${greenBold('██████╗ ')}  ${bold('PaiCLI')} ${green('π')}  ${dim(`v${version}`)}`,
+    `  ${greenBold('  ██  ██╗')}  ${dim('Model')} ${model}${provider}`,
+    `  ${greenBold('  ██  ██║')}  ${dim('MCP')} ${mcp} · ${dim(`${status?.toolCount ?? 0} tools`)} · ${skills} skills · ${mode}`,
+    `  ${greenBold('  ██  ██║')}  ${dim('ReAct · Plan · MCP · Browser · Image · Tools · Memory · RAG')}`,
+    `  ${greenBold('  ╚╝  ╚╝')}`,
+    '',
+    'Tips for getting started:',
+    '1. Type / for commands and Tab completion',
+    '2. Ask coding questions, edit code or run commands',
+    '3. Attach context with @path or @image',
+    '',
+  ].join('\n')
 }
 
-function PromptLine({ value, active }: { value: string; active: boolean }): React.ReactElement {
-  const content = value || (active ? '' : 'processing...')
-  return (
-    <Box paddingX={1} height={1}>
-      <Text color="magenta">{'>'} </Text>
-      <Text>{active ? content : <Text dimColor>{content}</Text>}</Text>
-      {active ? <Text color="cyan">█</Text> : null}
-    </Box>
-  )
+function renderUserInput(value: string): string {
+  return `\n${magenta('>')} ${bold(value)}\n`
 }
 
-function Footer({ status, columns }: { status: StatusInfo | null; columns: number }): React.ReactElement {
+function renderAssistant(text: string): string {
+  return `\n${renderMarkdownAnsi(text)}\n`
+}
+
+function renderThinking(text: string): string {
+  const body = indent(renderMarkdownAnsi(text), '  ')
+  return `\n${blue('∴ Thinking')}\n${dim(body)}\n`
+}
+
+function renderToolCall(name: string, summary: string): string {
+  const detail = summary ? `  ${dim(summary)}` : ''
+  return `\n${yellow('⚡ Tool call')} · ${bold(name)}${detail}\n`
+}
+
+function renderToolResult(title: string, content: string, isError: boolean): string {
+  const heading = isError ? red('✗ Tool error') : cyan('✓ Tool result')
+  const body = renderMarkdownAnsi(content.slice(0, 1_600))
+  return `\n${heading} · ${dim(title)}\n${dim(body)}\n`
+}
+
+function renderMarkdownAnsi(markdown: string): string {
+  const lines: string[] = []
+  for (const block of parseMarkdownBlocks(markdown)) {
+    if (block.type === 'blank') {
+      lines.push('')
+    } else if (block.type === 'heading') {
+      lines.push(greenBold(block.text))
+    } else if (block.type === 'list') {
+      lines.push(`${dim(block.marker)}  ${renderInlineAnsi(block.text)}`)
+    } else if (block.type === 'quote') {
+      lines.push(`${dim('│')} ${dim(renderInlineAnsi(block.text))}`)
+    } else if (block.type === 'code') {
+      if (block.language) lines.push(dim(block.language))
+      for (const line of block.lines) lines.push(dim(`  ${line}`))
+    } else if (block.type === 'rule') {
+      lines.push(dim('─'.repeat(Math.min(getColumns(), 80))))
+    } else {
+      lines.push(renderInlineAnsi(block.text))
+    }
+  }
+  return lines.join('\n')
+}
+
+function renderInlineAnsi(text: string): string {
+  return parseInlineMarkdown(text).map((token) => {
+    if (token.type === 'bold') return bold(token.text)
+    if (token.type === 'code') return yellow(token.text)
+    if (token.type === 'link') return `${token.label} ${dim(token.url)}`
+    return token.text
+  }).join('')
+}
+
+function renderLivePreview(kind: LiveKind, text: string, columns: number): string[] {
+  if (!kind || !text.trim()) return []
+  const title = kind === 'thinking' ? blue('∴ Thinking') : dim('Streaming response')
+  const rendered = renderMarkdownAnsi(text)
+  const bodyLines = rendered.split('\n').filter((line) => line.length > 0)
+  const visibleBody = bodyLines.slice(-Math.max(2, Math.min(8, getRows() - 8)))
+  return [
+    title,
+    ...visibleBody.map((line) => truncateDisplay(line, columns)),
+    '',
+  ]
+}
+
+function buildPromptLine(value: string, active: boolean, columns: number): { line: string; cursorColumn: number } {
+  const prefix = `${magenta('>')} `
+  const content = active ? value : dim('processing...')
+  const line = truncateDisplay(`${prefix}${content}`, columns)
+  const cursorColumn = Math.min(columns, 3 + terminalDisplayWidth(value))
+  return { line, cursorColumn }
+}
+
+function buildFooterLines(status: StatusInfo | null, columns: number): { first: string; second: string } {
   const width = Math.max(40, Math.min(columns, 160))
   if (!status) {
-    return (
-      <Box flexDirection="column">
-        <Text dimColor>{'─'.repeat(width)}</Text>
-        <Text wrap="truncate-end">Auto Model · unknown idle</Text>
-      </Box>
-    )
+    return {
+      first: 'Auto Model · unknown idle',
+      second: '',
+    }
   }
+
+  const firstLeft = 'YOLO Ctrl+Y to enable HITL'
+  const firstRight = `${status.loadedSkills ?? 0} skills · ${status.connectedMcpServers ?? 0} MCP servers`
+  const gap = Math.max(1, width - firstLeft.length - firstRight.length)
+  const first = `${yellow(firstLeft)}${' '.repeat(gap)}${yellow(firstRight)}`
 
   const provider = status.provider ? ` (${status.provider})` : ''
   const contextPercent = getContextPercent(status)
   const ctx = `${contextPercent}% (${formatCompact(status.tokensUsed)}/${formatCompact(status.tokenLimit)})`
   const hitl = status.hitlMode ?? 'auto'
-  const firstLeft = 'YOLO Ctrl+Y to enable HITL'
-  const firstRight = `${status.loadedSkills ?? 0} skills · ${status.connectedMcpServers ?? 0} MCP servers`
-  const firstGap = Math.max(1, width - firstLeft.length - firstRight.length)
-  const firstLine = `${firstLeft}${' '.repeat(firstGap)}${firstRight}`
-  const secondLine = buildFooterLine(status, provider, ctx, hitl, width)
-
-  return (
-    <Box flexDirection="column">
-      <Text dimColor>{'─'.repeat(width)}</Text>
-      <Text color="yellow" wrap="truncate-end">{truncateEnd(firstLine, width)}</Text>
-      <Text wrap="truncate-end">{truncateEnd(secondLine, width)}</Text>
-    </Box>
-  )
-}
-
-function buildFooterLine(status: StatusInfo, provider: string, ctx: string, hitl: string, width: number): string {
-  const model = width >= 100 ? `${status.model}${provider}` : status.model
   const parts = [
-    'Auto Model',
-    model,
-    status.statusText ?? 'idle',
-    `ctx ${ctx}`,
+    magenta('Auto Model'),
+    `${status.model}${provider}`,
+    green(status.statusText ?? 'idle'),
+    `ctx ${green(ctx)}`,
     `turns ${status.conversationTurns ?? 0}`,
     `hitl ${hitl}`,
   ]
-  if (width >= 95) {
-    parts.push(status.memoryEnabled ? 'mem' : 'mem off')
+  if (width >= 95) parts.push(status.memoryEnabled ? 'mem' : 'mem off')
+  if (width >= 115 && status.cwd) parts.push(compactPath(status.cwd, 42))
+
+  return {
+    first: truncateDisplay(first, width),
+    second: truncateDisplay(parts.join(' · '), width),
   }
-
-  const baseLine = parts.join(' · ')
-  if (width < 100 || !status.cwd) return baseLine
-
-  const remainingForPath = width - baseLine.length - 3
-  if (remainingForPath < 16) return baseLine
-  return `${baseLine} · ${compactPath(status.cwd, remainingForPath)}`
-}
-
-function capItems(items: TranscriptItem[]): TranscriptItem[] {
-  return items.length > 200 ? items.slice(-200) : items
 }
 
 function summarizeToolInput(input: Record<string, unknown>): string {
   return Object.entries(input)
     .slice(0, 3)
-    .map(([key, value]) => `${key}=${typeof value === 'string' ? value.slice(0, 40) : JSON.stringify(value)}`)
+    .map(([key, value]) => `${key}=${typeof value === 'string' ? value.slice(0, 50) : JSON.stringify(value)}`)
     .join(', ')
 }
 
@@ -617,15 +529,91 @@ function formatCompact(value: number): string {
   return String(value)
 }
 
-function truncateEnd(value: string, maxLength: number): string {
-  if (value.length <= maxLength) return value
-  if (maxLength <= 1) return '…'
-  return `${value.slice(0, maxLength - 1)}…`
-}
-
 function compactPath(path: string, maxLength = 48): string {
   const home = process.env.HOME
   const normalized = home && path.startsWith(home) ? `~${path.slice(home.length)}` : path
   if (normalized.length <= maxLength) return normalized
   return `…${normalized.slice(-(maxLength - 1))}`
 }
+
+function indent(text: string, prefix: string): string {
+  return text.split('\n').map((line) => `${prefix}${line}`).join('\n')
+}
+
+function getColumns(): number {
+  return process.stdout.columns && process.stdout.columns > 40 ? process.stdout.columns : 100
+}
+
+function getRows(): number {
+  return process.stdout.rows && process.stdout.rows > 8 ? process.stdout.rows : 30
+}
+
+export function applyPromptInput(currentValue: string, input: string, key: PromptKey): PromptInputUpdate {
+  const lineBreakIndex = input.search(/[\r\n]/)
+  if (lineBreakIndex >= 0) {
+    return { value: '', submit: `${currentValue}${input.slice(0, lineBreakIndex)}`.trim() }
+  }
+
+  if (key.return) {
+    return { value: '', submit: currentValue.trim() }
+  }
+
+  if (key.backspace || key.delete) {
+    return { value: Array.from(currentValue).slice(0, -1).join('') }
+  }
+
+  if (input === '\u001b') {
+    return { value: currentValue }
+  }
+
+  if (input < ' ' && input !== '\t') {
+    return { value: currentValue }
+  }
+
+  if (!key.ctrl && !key.meta && input) {
+    return { value: currentValue + input }
+  }
+
+  return { value: currentValue }
+}
+
+function truncateDisplay(value: string, maxWidth: number): string {
+  const raw = stripAnsi(value)
+  if (terminalDisplayWidth(raw) <= maxWidth) return value
+
+  let width = 0
+  let result = ''
+  for (const char of Array.from(raw)) {
+    const charWidth = terminalDisplayWidth(char)
+    if (width + charWidth > maxWidth - 1) break
+    result += char
+    width += charWidth
+  }
+  return `${result}…`
+}
+
+function terminalDisplayWidth(value: string): number {
+  let width = 0
+  for (const char of Array.from(value)) {
+    width += isWideChar(char) ? 2 : 1
+  }
+  return width
+}
+
+function isWideChar(char: string): boolean {
+  return /[\u1100-\u115F\u2329\u232A\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE10-\uFE19\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6]/u.test(char)
+}
+
+function stripAnsi(value: string): string {
+  return value.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '')
+}
+
+function bold(value: string): string { return `\x1b[1m${value}\x1b[0m` }
+function dim(value: string): string { return `\x1b[90m${value}\x1b[0m` }
+function red(value: string): string { return `\x1b[31m${value}\x1b[0m` }
+function green(value: string): string { return `\x1b[92m${value}\x1b[0m` }
+function greenBold(value: string): string { return `\x1b[92m\x1b[1m${value}\x1b[0m` }
+function yellow(value: string): string { return `\x1b[93m${value}\x1b[0m` }
+function blue(value: string): string { return `\x1b[34m${value}\x1b[0m` }
+function cyan(value: string): string { return `\x1b[36m${value}\x1b[0m` }
+function magenta(value: string): string { return `\x1b[38;5;213m${value}\x1b[0m` }

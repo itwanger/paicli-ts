@@ -1,5 +1,5 @@
 /**
- * REPL 启动 — Ink render
+ * REPL 启动 — terminal renderer
  * 整合渲染器、Agent、工具系统的主入口
  */
 

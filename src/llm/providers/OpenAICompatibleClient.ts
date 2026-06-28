@@ -72,6 +72,12 @@ export class OpenAICompatibleClient extends BaseLlmClient {
       const choice = choices[0]
       const delta = (choice.delta as Record<string, unknown> | undefined) ?? {}
 
+      // DeepSeek reasoner/V4 streams thinking through the OpenAI-compatible
+      // delta.reasoning_content field instead of delta.content.
+      if (typeof delta.reasoning_content === 'string' && delta.reasoning_content) {
+        yield { type: 'thinking_delta', thinking: delta.reasoning_content }
+      }
+
       // 文本内容
       if (typeof delta.content === 'string' && delta.content) {
         yield { type: 'text_delta', text: delta.content }

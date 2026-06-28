@@ -217,6 +217,39 @@ describe('regressions', () => {
     expect(events.some((event) => event.type === 'text_delta' && event.text === 'ok')).toBe(true)
   })
 
+  it('emits thinking deltas from OpenAI-compatible reasoning_content chunks', async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      res.write(`data: ${JSON.stringify({
+        choices: [{ delta: { reasoning_content: '先分析一下。' } }],
+      })}\n\n`)
+      res.write(`data: ${JSON.stringify({
+        choices: [{ delta: { content: '结论' }, finish_reason: 'stop' }],
+      })}\n\n`)
+      res.write('data: [DONE]\n\n')
+      res.end()
+    })
+    const port = await listen(server)
+    const client = new OpenAICompatibleClient({
+      apiKey: 'x',
+      baseUrl: `http://127.0.0.1:${port}`,
+      model: 'fake',
+      maxTokens: 100,
+      temperature: 0,
+      timeout: 1_000,
+      providerName: 'test',
+    })
+
+    const events = []
+    for await (const event of client.chat([], [])) {
+      events.push(event)
+    }
+    server.close()
+
+    expect(events).toContainEqual({ type: 'thinking_delta', thinking: '先分析一下。' })
+    expect(events).toContainEqual({ type: 'text_delta', text: '结论' })
+  })
+
   it('persists save_memory tool entries to SQLite', async () => {
     const root = tempDir('paicli-memory-')
     const dbPath = join(root, 'memory.db')
