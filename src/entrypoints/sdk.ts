@@ -1,0 +1,22 @@
+/**
+ * SDK 入口 — 无头模式导出
+ */
+export { QueryEngine } from '../QueryEngine.js'
+export { Agent } from '../agent/Agent.js'
+export { PlanExecuteAgent } from '../agent/PlanExecuteAgent.js'
+export { AgentOrchestrator } from '../agent/AgentOrchestrator.js'
+export { createLlmClient } from '../llm/LlmClientFactory.js'
+export { ToolRegistry } from '../tools/registry.js'
+export { StreamingToolExecutor } from '../tools/executor.js'
+export { getBuiltinTools } from '../tools/builtins/index.js'
+export { buildTool } from '../tools/Tool.js'
+export { commandRegistry } from '../commands/index.js'
+export { PromptAssembler } from '../prompt/PromptAssembler.js'
+export { McpServerManager } from '../mcp/McpServerManager.js'
+export type { LlmClient, StreamEvent } from '../llm/types.js'
+export type { PaiCliConfig } from '../types/config.js'
+export type { Message, AssistantMessage, UserMessage } from '../types/message.js'
+export type { ToolDefinition, ToolResult, ToolContext } from '../types/tool.js'
+export type { AgentEvent } from '../query.js'
+export type { AgentOptions } from '../agent/Agent.js'
+export type { SlashCommand, CommandContext } from '../commands/index.js'
