@@ -91,6 +91,28 @@ pnpm paicli --provider deepseek --model deepseek-v4-flash -p "hello"
 pnpm paicli --provider deepseek --model deepseek-v4-pro -p "hello"
 ```
 
+## 实测截图
+
+键入 `pnpm paicli`，就可以看到运行结果了。
+
+![](https://cdn.paicoding.com/stutymore/qoder-desktop-release-20260628234804.png)
+
+整体还不错哈。
+
+键入 `联网搜一下沉默王二是谁啊？`，来看看整体的效果。
+
+![](https://cdn.paicoding.com/stutymore/qoder-desktop-release-20260628234944.png)
+
+tool use 可用，Web search 工具也可用。
+
+![](https://cdn.paicoding.com/stutymore/qoder-desktop-release-20260628235020.png)
+
+思考过程和最终的 response 也都正确。
+
+真不错，真不错。
+
+![](https://cdn.paicoding.com/stutymore/qoder-desktop-release-20260628235059.png)
+
 ## MCP Server
 
 HTTP 模式：
