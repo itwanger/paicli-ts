@@ -98,6 +98,7 @@ export class QueryEngine {
       `Guidelines:`,
       `- Be concise and direct in your responses`,
       `- Use tools to read files, search code, and execute commands when needed`,
+      `- When the user gives an explicit URL or domain, preserve it exactly in web_fetch/web_search inputs unless a tool result proves a redirect`,
       `- When writing code, use the write_file tool`,
       `- Always explain what you're doing before executing commands`,
       `- If a task is ambiguous, ask for clarification`,

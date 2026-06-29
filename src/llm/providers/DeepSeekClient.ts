@@ -32,4 +32,8 @@ export class DeepSeekClient extends OpenAICompatibleClient {
       promptCache: true,
     })
   }
+
+  protected override shouldReplayReasoningContent(): boolean {
+    return true
+  }
 }

@@ -39,7 +39,7 @@ export class Agent {
    * 发送消息并获取流式事件
    */
   async *run(message: string, abortSignal?: AbortSignal): AsyncGenerator<AgentEvent> {
-    yield* query({
+    for await (const event of query({
       llmClient: this.options.llmClient,
       toolRegistry: this.options.toolRegistry,
       systemPrompt: this.options.systemPrompt,
@@ -50,10 +50,12 @@ export class Agent {
       config: this.options.config,
       abortSignal,
       approvalCallback: this.options.approvalCallback,
-    })
-
-    // 将用户消息加入历史
-    this.history.push({ type: 'user', content: message })
+    })) {
+      if (event.type === 'done' && event.messages) {
+        this.history = event.messages
+      }
+      yield event
+    }
   }
 
   /**
@@ -75,16 +77,6 @@ export class Agent {
         totalTokens = event.totalTokens
         turns = event.totalTurns
       }
-    }
-
-    // 将助手回复加入历史
-    if (text) {
-      this.history.push({
-        type: 'assistant',
-        content: [{ type: 'text', text }],
-        model: this.options.llmClient.modelName,
-        stopReason: 'end_turn',
-      })
     }
 
     return { text, totalTokens, turns }

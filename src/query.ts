@@ -9,6 +9,7 @@ import type { ToolRegistry } from './tools/registry.js'
 import { StreamingToolExecutor } from './tools/executor.js'
 import type { ToolContext } from './types/tool.js'
 import type { PaiCliConfig } from './types/config.js'
+import { normalizeWebToolInput } from './tools/webInputGuard.js'
 
 /** 查询参数 */
 export interface QueryParams {
@@ -43,7 +44,7 @@ export type AgentEvent =
   | { type: 'turn_complete'; turn: number; stopReason: StopReason }
   | { type: 'usage'; usage: MessageUsage }
   | { type: 'error'; error: Error }
-  | { type: 'done'; totalTurns: number; totalTokens: number }
+  | { type: 'done'; totalTurns: number; totalTokens: number; messages?: Message[]; newMessages?: Message[] }
 
 /**
  * 主 Agent 循环 — ReAct 模式
@@ -105,6 +106,7 @@ export async function* query(params: QueryParams): AsyncGenerator<AgentEvent> {
             break
 
           case 'thinking_delta':
+            contentBlocks.push({ type: 'thinking', thinking: event.thinking })
             yield { type: 'thinking_delta', thinking: event.thinking }
             break
 
@@ -126,6 +128,7 @@ export async function* query(params: QueryParams): AsyncGenerator<AgentEvent> {
             } catch {
               toolInput = { raw: currentToolInput }
             }
+            toolInput = normalizeWebToolInput(currentToolName, toolInput, userMessage)
             contentBlocks.push({
               type: 'tool_use',
               id: currentToolId,
@@ -155,7 +158,7 @@ export async function* query(params: QueryParams): AsyncGenerator<AgentEvent> {
     }
 
     // 合并相邻文本块
-    const mergedBlocks = mergeTextBlocks(contentBlocks)
+    const mergedBlocks = mergeContentBlocks(contentBlocks)
 
     // 添加助手消息到历史
     const assistantMessage: AssistantMessage = {
@@ -200,18 +203,28 @@ export async function* query(params: QueryParams): AsyncGenerator<AgentEvent> {
     // 继续循环 — LLM 将看到工具结果
   }
 
-  yield { type: 'done', totalTurns: turn, totalTokens }
+  yield {
+    type: 'done',
+    totalTurns: turn,
+    totalTokens,
+    messages: [...messages],
+    newMessages: messages.slice(history.length),
+  }
 }
 
-/** 合并相邻的文本块 */
-function mergeTextBlocks(blocks: AssistantContentBlock[]): AssistantContentBlock[] {
+/** 合并相邻的同类流式内容块 */
+function mergeContentBlocks(blocks: AssistantContentBlock[]): AssistantContentBlock[] {
   const merged: AssistantContentBlock[] = []
 
   for (const block of blocks) {
-    if (block.type === 'text' && merged.length > 0) {
+    if ((block.type === 'text' || block.type === 'thinking') && merged.length > 0) {
       const last = merged[merged.length - 1]
-      if (last.type === 'text') {
+      if (block.type === 'text' && last.type === 'text') {
         last.text += block.text
+        continue
+      }
+      if (block.type === 'thinking' && last.type === 'thinking') {
+        last.thinking += block.thinking
         continue
       }
     }

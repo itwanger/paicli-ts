@@ -8,6 +8,7 @@ import { z } from 'zod'
 import { loadConfig } from '../../src/config/Config.js'
 import { expandHomePath } from '../../src/config/paths.js'
 import { OpenAICompatibleClient } from '../../src/llm/providers/OpenAICompatibleClient.js'
+import { DeepSeekClient } from '../../src/llm/providers/DeepSeekClient.js'
 import { PromptAssembler } from '../../src/prompt/PromptAssembler.js'
 import { query } from '../../src/query.js'
 import { QueryEngine } from '../../src/QueryEngine.js'
@@ -248,6 +249,195 @@ describe('regressions', () => {
 
     expect(events).toContainEqual({ type: 'thinking_delta', thinking: '先分析一下。' })
     expect(events).toContainEqual({ type: 'text_delta', text: '结论' })
+  })
+
+  it('replays DeepSeek reasoning_content when continuing after tool calls', async () => {
+    let requestCount = 0
+    let secondRequestBody: Record<string, unknown> | undefined
+
+    const server = createServer(async (req, res) => {
+      requestCount++
+      let body = ''
+      for await (const chunk of req) body += chunk
+      if (requestCount === 2) {
+        secondRequestBody = JSON.parse(body) as Record<string, unknown>
+      }
+
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      if (requestCount === 1) {
+        res.write(`data: ${JSON.stringify({
+          choices: [{ delta: { reasoning_content: '先分析。' } }],
+        })}\n\n`)
+        res.write(`data: ${JSON.stringify({
+          choices: [{
+            delta: {
+              tool_calls: [{
+                index: 0,
+                id: 'call_1',
+                type: 'function',
+                function: { name: 'echo_tool', arguments: '{"value":2}' },
+              }],
+            },
+            finish_reason: 'tool_calls',
+          }],
+        })}\n\n`)
+      } else {
+        res.write(`data: ${JSON.stringify({
+          choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }],
+        })}\n\n`)
+      }
+      res.write('data: [DONE]\n\n')
+      res.end()
+    })
+    const port = await listen(server)
+
+    const client = new DeepSeekClient({
+      apiKey: 'x',
+      baseUrl: `http://127.0.0.1:${port}`,
+      model: 'deepseek-v4-flash',
+      maxTokens: 100,
+      temperature: 0,
+      timeout: 5_000,
+    })
+    const registry = new ToolRegistry()
+    registry.register(buildTool({
+      name: 'echo_tool',
+      description: 'echo',
+      inputSchema: z.object({ value: z.number() }),
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      async call(input) {
+        return { content: `echo ${input.value}` }
+      },
+    }))
+
+    const events = []
+    for await (const event of query({ llmClient: client, toolRegistry: registry, systemPrompt: 's', userMessage: 'u', cwd: process.cwd() })) {
+      events.push(event)
+    }
+    server.close()
+
+    expect(requestCount).toBe(2)
+    const messages = secondRequestBody?.messages as Array<Record<string, unknown>>
+    const assistantWithToolCall = messages.find((message) => message.role === 'assistant' && message.tool_calls)
+    expect(assistantWithToolCall?.reasoning_content).toBe('先分析。')
+    expect(events).toContainEqual({ type: 'text_delta', text: 'done' })
+  })
+
+  it('does not replay reasoning_content for generic OpenAI-compatible providers', async () => {
+    let requestBody: Record<string, unknown> | undefined
+    const server = createServer(async (req, res) => {
+      let body = ''
+      for await (const chunk of req) body += chunk
+      requestBody = JSON.parse(body) as Record<string, unknown>
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      res.write(`data: ${JSON.stringify({
+        choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+      })}\n\n`)
+      res.write('data: [DONE]\n\n')
+      res.end()
+    })
+    const port = await listen(server)
+    const client = new OpenAICompatibleClient({
+      apiKey: 'x',
+      baseUrl: `http://127.0.0.1:${port}`,
+      model: 'fake',
+      maxTokens: 100,
+      temperature: 0,
+      timeout: 1_000,
+      providerName: 'test',
+    })
+
+    for await (const _event of client.chat([{
+      type: 'assistant',
+      content: [{ type: 'thinking', thinking: 'hidden' }, { type: 'text', text: 'answer' }],
+    }], [])) {
+      // consume
+    }
+    server.close()
+
+    const messages = requestBody?.messages as Array<Record<string, unknown>>
+    expect(messages[0]).toEqual({ role: 'assistant', content: 'answer' })
+  })
+
+  it('corrects web tool inputs back to the explicit user domain', async () => {
+    let requestCount = 0
+    let secondRequestBody: Record<string, unknown> | undefined
+    const server = createServer(async (req, res) => {
+      requestCount++
+      let body = ''
+      for await (const chunk of req) body += chunk
+      if (requestCount === 2) {
+        secondRequestBody = JSON.parse(body) as Record<string, unknown>
+      }
+
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      if (requestCount === 1) {
+        res.write(`data: ${JSON.stringify({
+          choices: [{
+            delta: {
+              tool_calls: [{
+                index: 0,
+                id: 'call_1',
+                type: 'function',
+                function: { name: 'web_fetch', arguments: '{"url":"https://ai.javabetter.com"}' },
+              }],
+            },
+            finish_reason: 'tool_calls',
+          }],
+        })}\n\n`)
+      } else {
+        res.write(`data: ${JSON.stringify({
+          choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }],
+        })}\n\n`)
+      }
+      res.write('data: [DONE]\n\n')
+      res.end()
+    })
+    const port = await listen(server)
+    const client = new OpenAICompatibleClient({
+      apiKey: 'x',
+      baseUrl: `http://127.0.0.1:${port}`,
+      model: 'fake',
+      maxTokens: 100,
+      temperature: 0,
+      timeout: 5_000,
+      providerName: 'test',
+    })
+    const registry = new ToolRegistry()
+    registry.register(buildTool({
+      name: 'web_fetch',
+      description: 'fetch',
+      inputSchema: z.object({ url: z.string() }),
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      async call(input) {
+        return { content: `fetched ${input.url}` }
+      },
+    }))
+
+    const toolCalls: Array<Record<string, unknown>> = []
+    const toolResults: string[] = []
+    for await (const event of query({
+      llmClient: client,
+      toolRegistry: registry,
+      systemPrompt: 's',
+      userMessage: 'ai.javabetter.cn 这个网站你觉得怎么样？',
+      cwd: process.cwd(),
+    })) {
+      if (event.type === 'tool_call') toolCalls.push(event.input)
+      if (event.type === 'tool_result') toolResults.push(event.result)
+    }
+    server.close()
+
+    expect(toolCalls[0]?.url).toBe('https://ai.javabetter.cn/')
+    expect(toolResults[0]).toBe('fetched https://ai.javabetter.cn/')
+
+    const messages = secondRequestBody?.messages as Array<Record<string, unknown>>
+    const assistantWithToolCall = messages.find((message) => message.role === 'assistant' && message.tool_calls)
+    const sentToolCall = (assistantWithToolCall?.tool_calls as Array<Record<string, unknown>>)[0]
+    const sentFunction = sentToolCall.function as Record<string, unknown>
+    expect(sentFunction.arguments).toBe('{"url":"https://ai.javabetter.cn/"}')
   })
 
   it('persists save_memory tool entries to SQLite', async () => {

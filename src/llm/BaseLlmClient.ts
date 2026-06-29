@@ -189,6 +189,11 @@ export abstract class BaseLlmClient implements LlmClient {
       .map((b) => (b as { text: string }).text)
       .join('')
 
+    const reasoningParts = msg.content
+      .filter((b) => b.type === 'thinking')
+      .map((b) => (b as { thinking: string }).thinking)
+      .join('')
+
     const toolCalls = msg.content
       .filter((b) => b.type === 'tool_use')
       .map((b) => {
@@ -205,9 +210,17 @@ export abstract class BaseLlmClient implements LlmClient {
 
     const result: Record<string, unknown> = { role: 'assistant' }
     if (textParts) result.content = textParts
+    if (reasoningParts && this.shouldReplayReasoningContent()) {
+      result.reasoning_content = reasoningParts
+    }
     if (toolCalls.length > 0) result.tool_calls = toolCalls
 
     return result
+  }
+
+  /** 是否在请求历史里回放 assistant reasoning_content */
+  protected shouldReplayReasoningContent(): boolean {
+    return false
   }
 
   /** 工具：将 ToolDefinition 转为 OpenAI function 格式 */

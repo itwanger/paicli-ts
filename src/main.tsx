@@ -76,7 +76,7 @@ export async function startRepl(config: PaiCliConfig, cwd: string): Promise<void
             provider: config.llm.provider,
             planMode,
             teamMode,
-            conversationTurns: Math.floor(history.length / 2),
+            conversationTurns: countConversationTurns(history),
             contextTokens: getContextTokens(),
           },
           setModel(model, provider) {
@@ -119,6 +119,7 @@ export async function startRepl(config: PaiCliConfig, cwd: string): Promise<void
         let assistantText = ''
         let completed = false
         let thinkingStarted = false
+        let nextHistory: Message[] | undefined
         renderer.showStatus(buildStatus('thinking'))
         for await (const event of runAgent(input)) {
           switch (event.type) {
@@ -157,6 +158,7 @@ export async function startRepl(config: PaiCliConfig, cwd: string): Promise<void
               break
             case 'done':
               completed = true
+              nextHistory = event.messages
               if (thinkingStarted) {
                 renderer.endThinking()
                 thinkingStarted = false
@@ -167,8 +169,12 @@ export async function startRepl(config: PaiCliConfig, cwd: string): Promise<void
           }
         }
         if (completed) {
-          history.push({ type: 'user', content: input })
-          if (assistantText) {
+          if (nextHistory) {
+            history = nextHistory
+          } else {
+            history.push({ type: 'user', content: input })
+          }
+          if (!nextHistory && assistantText) {
             history.push({
               type: 'assistant',
               content: [{ type: 'text', text: assistantText }],
@@ -258,7 +264,7 @@ export async function startRepl(config: PaiCliConfig, cwd: string): Promise<void
       hitlMode: config.policy.hitlMode,
       memoryEnabled: config.features.memory,
       compressionThresholdPercent: contextStatus.compressionThresholdPercent,
-      conversationTurns: Math.floor(history.length / 2),
+      conversationTurns: countConversationTurns(history),
     }
   }
 
@@ -272,7 +278,7 @@ export async function startRepl(config: PaiCliConfig, cwd: string): Promise<void
       shortTermMemoryBudget: contextStatus.tokenBudget,
       mcpResourceIndex: false,
       promptCache: getPromptCacheStatus(),
-      conversationTurns: Math.floor(history.length / 2),
+      conversationTurns: countConversationTurns(history),
     }
   }
 
@@ -308,4 +314,8 @@ function estimateHistoryTokens(messages: Message[]): number {
   if (messages.length === 0) return 0
   const serialized = messages.map((message) => JSON.stringify(message)).join('')
   return Math.ceil(serialized.length / 4)
+}
+
+function countConversationTurns(messages: Message[]): number {
+  return messages.filter((message) => message.type === 'user').length
 }
